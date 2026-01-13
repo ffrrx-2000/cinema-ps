@@ -5,10 +5,10 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes, ConversationHandler
 from telegram.constants import ParseMode
 
-# الإعدادات الأساسية - التوكن مخفي للأمان بناءً على نصيحة إبراهيم
+# الإعدادات الأساسية
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# الأقسام العشرة مع مفاتيح Mux الخاصة بك
+# الأقسام العشرة (بياناتك الموثقة)
 MUX_SECTIONS = {
     "1": {"id": "2ab8ed37-b8af-4ffa-ab78-bc0910fcac6e", "secret": "zkX7I4isPxeMz6tFh20vFt37sNOWPpPgaMpH0u7i2dvavEMea84Wob8UfFvIVouNcfzjpIgt7jl"},
     "2": {"id": "3522203d-1925-4ec3-a5f7-9ca9efd1771a", "secret": "p7fHTPl4hFvLh1koWPHlJ7cif9GcOCFxDAYHIAraC4mcGABRrJWp2jNJ4B4cVgIcE2YOY+AT1wb"},
@@ -40,7 +40,7 @@ async def section_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['video_name'] = update.message.text
-    await update.message.reply_text(f"📝 اسم الفيلم المسجل: {update.message.text}\nأرسل رابط الفيديو الآن:")
+    await update.message.reply_text(f"📝 الاسم المسجل: {update.message.text}\nأرسل رابط الفيديو المباشر الآن:")
     return LINKING
 
 async def get_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -49,18 +49,13 @@ async def get_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     creds = MUX_SECTIONS[section_id]
     video_title = context.user_data['video_name']
     
-    status_msg = await update.message.reply_text("⏳ جاري إرسال الفيلم وتحديث البيانات في Mux...")
+    status_msg = await update.message.reply_text("⏳ جاري إرسال الطلب لـ Mux وتعيين الاسم...")
     
     mux_url = "https://api.mux.com/video/v1/assets"
-    
-    # تحديث الـ Payload ليشمل العنوان في لوحة تحكم Mux
     payload = {
-        "input": [{"url": video_url}],
-        "playback_policy": ["public"],
-        "passthrough": video_title,
-        "metadata": {
-            "video_title": video_title  # هذا الحقل هو الذي سيظهر الاسم في الموقع
-        }
+        "input": video_url, 
+        "playback_policy": ["public"], 
+        "passthrough": video_title  # هذا الحقل سيظهر كاسم للفيديو في لوحة تحكم Mux
     }
     
     try:
@@ -74,8 +69,8 @@ async def get_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"✅ <b>تم الرفع بنجاح!</b>\n\n"
                 f"🎬 الفيلم: <b>{video_title}</b>\n"
                 f"📂 القسم: <b>{section_id}</b>\n\n"
-                f"🔑 <b>Playback ID (اضغط للنسخ):</b>\n<code>{playback_id}</code>\n\n"
-                f"⚠️ <i>سأرسل لك إشعاراً فور انتهاء المعالجة.</i>",
+                f"🔗 <b>Playback ID (اضغط للنسخ):</b>\n<code>{playback_id}</code>\n\n"
+                f"⚠️ <i>سأخبرك فور أن يصبح الفيلم جاهزاً للمشاهدة.</i>",
                 parse_mode=ParseMode.HTML
             )
             
@@ -90,17 +85,17 @@ async def get_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def check_mux_status(update, asset_id, creds, video_name, playback_id):
     url = f"https://api.mux.com/video/v1/assets/{asset_id}"
     for _ in range(60):
-        await asyncio.sleep(20) # فحص كل 20 ثانية
+        await asyncio.sleep(20)
         try:
             res = requests.get(url, auth=(creds["id"], creds["secret"]))
             if res.status_code == 200:
                 status = res.json()["data"]["status"]
                 if status == "ready":
                     await update.message.reply_text(
-                        f"🎉 <b>الفيلم أصبح جاهزاً!</b> ✅\n\n"
-                        f"🎬 الفيلم: <b>{video_name}</b>\n"
-                        f"🔑 كود التشغيل المستنسخ:\n<code>{playback_id}</code>\n\n"
-                        f"🚀 استمتع بالمشاهدة في سينما بلاس.",
+                        f"🎉 <b>الفيلم جاهز الآن!</b> ✅\n\n"
+                        f"🎬 الاسم: <b>{video_name}</b>\n"
+                        f"🔑 كود التشغيل (Playback ID):\n<code>{playback_id}</code>\n\n"
+                        f"🚀 يمكنك مشاهدة الفيلم في سينما بلاس الآن.",
                         parse_mode=ParseMode.HTML
                     )
                     return
@@ -119,3 +114,4 @@ if __name__ == '__main__':
     )
     app.add_handler(conv_handler)
     app.run_polling()
+    
