@@ -1,13 +1,14 @@
-
 import os
+import asyncio
 import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes, ConversationHandler
+from telegram.constants import ParseMode
 
-# الإعدادات الأساسية
+# الإعدادات الأساسية - التوكن مخفي للأمان بناءً على نصيحة إبراهيم
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# الأقسام العشرة مع مفاتيح Mux الخاصة بكل منها
+# الأقسام العشرة مع مفاتيح Mux الخاصة بك
 MUX_SECTIONS = {
     "1": {"id": "2ab8ed37-b8af-4ffa-ab78-bc0910fcac6e", "secret": "zkX7I4isPxeMz6tFh20vFt37sNOWPpPgaMpH0u7i2dvavEMea84Wob8UfFvIVouNcfzjpIgt7jl"},
     "2": {"id": "3522203d-1925-4ec3-a5f7-9ca9efd1771a", "secret": "p7fHTPl4hFvLh1koWPHlJ7cif9GcOCFxDAYHIAraC4mcGABRrJWp2jNJ4B4cVgIcE2YOY+AT1wb"},
@@ -21,60 +22,92 @@ MUX_SECTIONS = {
     "10": {"id": "fcbfcdcb-fbd3-41ae-ab10-5451502ac8d3", "secret": "NtwphUQyZZsrhOXgadrZN3QoJXxMVW2za+q0xFe/1vLl4PfRjrGCOn18BOqpGFMCFZAc/g2rR0R"}
 }
 
-# حالات المحادثة
 CHOOSING, NAMING, LINKING = range(3)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton(f"القسم {i}", callback_data=str(i)) for i in range(1, 6)],
                 [InlineKeyboardButton(f"القسم {i}", callback_data=str(i)) for i in range(6, 11)]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("مرحباً بك في سيرفر سينما بلاس 🎬\nالرجاء اختيار القسم المراد الرفع إليه:", reply_markup=reply_markup)
+    await update.message.reply_text("🎬 سيرفر سينما بلاس\nاختر القسم المطلوب للرفع:", reply_markup=reply_markup)
     return CHOOSING
 
 async def section_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     context.user_data['section'] = query.data
-    await query.edit_message_text(f"لقد اخترت القسم: {query.data}\nالآن أرسل 'اسم الفيلم':")
+    await query.edit_message_text(f"📍 القسم المختار: {query.data}\nالآن أرسل اسم الفيلم:")
     return NAMING
 
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['video_name'] = update.message.text
-    await update.message.reply_text(f"تم تسجيل الاسم: {update.message.text}\nالآن أرسل 'رابط الفيديو المباشر':")
+    await update.message.reply_text(f"📝 اسم الفيلم المسجل: {update.message.text}\nأرسل رابط الفيديو الآن:")
     return LINKING
 
 async def get_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     video_url = update.message.text
     section_id = context.user_data['section']
     creds = MUX_SECTIONS[section_id]
+    video_title = context.user_data['video_name']
     
-    await update.message.reply_text("جاري بدء عملية الرفع إلى Mux... انتظر قليلاً ⏳")
+    status_msg = await update.message.reply_text("⏳ جاري إرسال الفيلم وتحديث البيانات في Mux...")
     
-    # طلب الرفع إلى Mux API
     mux_url = "https://api.mux.com/video/v1/assets"
+    
+    # تحديث الـ Payload ليشمل العنوان في لوحة تحكم Mux
     payload = {
-        "input": video_url,
+        "input": [{"url": video_url}],
         "playback_policy": ["public"],
-        "passthrough": context.user_data['video_name']
+        "passthrough": video_title,
+        "metadata": {
+            "video_title": video_title  # هذا الحقل هو الذي سيظهر الاسم في الموقع
+        }
     }
     
     try:
         response = requests.post(mux_url, json=payload, auth=(creds["id"], creds["secret"]))
         if response.status_code == 201:
-            data = response.json()
-            asset_id = data["data"]["id"]
-            await update.message.reply_text(f"✅ تم الرفع بنجاح للقسم {section_id}!\n🆔 Asset ID: {asset_id}\nاسم الفيلم: {context.user_data['video_name']}")
+            data = response.json()["data"]
+            asset_id = data["id"]
+            playback_id = data["playback_ids"][0]["id"]
+            
+            await status_msg.edit_text(
+                f"✅ <b>تم الرفع بنجاح!</b>\n\n"
+                f"🎬 الفيلم: <b>{video_title}</b>\n"
+                f"📂 القسم: <b>{section_id}</b>\n\n"
+                f"🔑 <b>Playback ID (اضغط للنسخ):</b>\n<code>{playback_id}</code>\n\n"
+                f"⚠️ <i>سأرسل لك إشعاراً فور انتهاء المعالجة.</i>",
+                parse_mode=ParseMode.HTML
+            )
+            
+            asyncio.create_task(check_mux_status(update, asset_id, creds, video_title, playback_id))
         else:
-            await update.message.reply_text(f"❌ فشل الرفع. السبب: {response.status_code}\n{response.text}")
+            await status_msg.edit_text(f"❌ فشل الرفع. كود الخطأ: {response.status_code}")
     except Exception as e:
-        await update.message.reply_text(f"⚠️ حدث خطأ تقني: {str(e)}")
+        await status_msg.edit_text(f"⚠️ خطأ تقني: {str(e)}")
     
     return ConversationHandler.END
 
+async def check_mux_status(update, asset_id, creds, video_name, playback_id):
+    url = f"https://api.mux.com/video/v1/assets/{asset_id}"
+    for _ in range(60):
+        await asyncio.sleep(20) # فحص كل 20 ثانية
+        try:
+            res = requests.get(url, auth=(creds["id"], creds["secret"]))
+            if res.status_code == 200:
+                status = res.json()["data"]["status"]
+                if status == "ready":
+                    await update.message.reply_text(
+                        f"🎉 <b>الفيلم أصبح جاهزاً!</b> ✅\n\n"
+                        f"🎬 الفيلم: <b>{video_name}</b>\n"
+                        f"🔑 كود التشغيل المستنسخ:\n<code>{playback_id}</code>\n\n"
+                        f"🚀 استمتع بالمشاهدة في سينما بلاس.",
+                        parse_mode=ParseMode.HTML
+                    )
+                    return
+        except: pass
+
 if __name__ == '__main__':
-    print("Bot is running on Koyeb...")
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-    
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
@@ -84,6 +117,5 @@ if __name__ == '__main__':
         },
         fallbacks=[CommandHandler('start', start)],
     )
-    
     app.add_handler(conv_handler)
     app.run_polling()
