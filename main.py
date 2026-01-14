@@ -132,7 +132,7 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data == "nav_admin":
         if context.user_data.get('is_auth'):
             return await admin_menu(update, context)
-        await query.edit_message_text("🔐 أرسل كلمة المرور (1460) للمتابعة:")
+        await query.edit_message_text("🔐 أرسل كلمة المرور (الادمن) للمتابعة:")
         return AUTH_ADMIN
     elif query.data == "admin_keys":
         return await manage_keys_menu(update, context)
@@ -161,4 +161,5 @@ if __name__ == '__main__':
     )
     app.add_handler(conv)
     app.run_polling()
+
 
