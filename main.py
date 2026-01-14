@@ -40,7 +40,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("📤 رفع فيلم جديد", callback_data="nav_upload")],
         [InlineKeyboardButton("🎬 مراجعة الأفلام", callback_data="nav_review")],
-        [InlineKeyboardButton("⚙️ قسم الإدارة (1460)", callback_data="nav_admin")]
+        [InlineKeyboardButton("⚙️ قسم الإدارة (الادارة)", callback_data="nav_admin")]
     ]
     text = "🎬 <b>سيرفر سينما بلاس - النسخة المستقرة</b>\nتم إصلاح كافة الأقسام والربط بالقاعدة ✅"
     if update.message:
@@ -128,7 +128,7 @@ async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard = [[InlineKeyboardButton("🔑 تحديث المفاتيح", callback_data="admin_keys")], [InlineKeyboardButton("🏠 عودة", callback_data="back_home")]]
             await query.edit_message_text("⚙️ إدارة النظام:", reply_markup=InlineKeyboardMarkup(keyboard))
             return MENU
-        await query.edit_message_text("🔐 أرسل كلمة المرور (1460):")
+        await query.edit_message_text("🔐 أرسل كلمة المرور (الادمن):")
         return AUTH_ADMIN
     return MENU
 
@@ -150,3 +150,4 @@ if __name__ == '__main__':
     )
     app.add_handler(conv)
     app.run_polling()
+
