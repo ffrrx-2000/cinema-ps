@@ -3,32 +3,39 @@ import asyncio
 import requests
 from pymongo import MongoClient
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes, ConversationHandler
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, MessageHandler, 
+    CallbackQueryHandler, filters, ContextTypes, ConversationHandler
+)
 from telegram.constants import ParseMode
 
-# --- الإعدادات وجلب المتغيرات من Koyeb ---
+# --- 1. الإعدادات وجلب المتغيرات من Koyeb ---
+# تأكد من أن الرابط في Koyeb يبدأ بـ mongodb وليس Mongodb (حرف صغير)
 MONGO_URL = os.getenv("MONGO_URL") #
 BOT_TOKEN = os.getenv("BOT_TOKEN") #
-ADMIN_PASSWORD = "1460" 
+ADMIN_PASSWORD = "1460" #
 
-# --- الاتصال بقاعدة البيانات ---
+# --- 2. الاتصال بقاعدة البيانات ---
 client = MongoClient(MONGO_URL)
 db = client.cinema_plus_db
 sections_col = db.sections
 
-# --- حالات المحادثة (States) ---
+# --- 3. حالات المحادثة (States) ---
 (MENU, SELECT_UP, SELECT_REV, NAMING, LINKING, AUTH_ADMIN, 
  SELECT_DEL_SEC, SELECT_DEL_VID, SELECT_SET_SEC, INPUT_ID, INPUT_SECRET) = range(11)
 
 def load_mux_keys():
-    """تحميل مفاتيح الأقسام من MongoDB لضمان عدم ضياعها"""
+    """تحميل مفاتيح الأقسام من MongoDB لضمان ثباتها"""
     sections = {}
-    stored = sections_col.find().sort("section_id", 1)
-    for s in stored:
-        sections[str(s["section_id"])] = {"id": s["id"], "secret": s["secret"]}
+    stored_sections = sections_col.find().sort("section_id", 1)
+    for section in stored_sections:
+        sections[str(section["section_id"])] = {"id": section["id"], "secret": section["secret"]}
     return sections
 
+# تحميل المفاتيح في الذاكرة
 MUX_SECTIONS = load_mux_keys()
+
+# --- 4. الوظائف البرمجية ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
@@ -36,92 +43,146 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🎬 مراجعة الأفلام", callback_data="nav_review")],
         [InlineKeyboardButton("⚙️ قسم الإدارة (1460)", callback_data="nav_admin")]
     ]
-    text = "🎬 <b>لوحة تحكم سيرفر سينما بلاس</b>\nالبيانات مؤمنة عبر MongoDB وMux ✅"
+    text = "🎬 <b>لوحة تحكم سينما بلاس - الإصدار المستقر</b>\nالنظام مرتبط بقاعدة البيانات ومؤمن بالكامل ✅"
+    
     if update.message:
         await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
     else:
         await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
     return MENU
 
-# --- قسم الإدارة (الحماية والتحكم) ---
+# --- قسم الإدارة والأمان ---
 async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == ADMIN_PASSWORD:
         context.user_data['is_auth'] = True
-        keyboard = [
-            [InlineKeyboardButton("🗑️ حذف فيديوهات من Mux", callback_data="admin_del")],
-            [InlineKeyboardButton("🔑 إضافة/تعديل مفاتيح الأقسام", callback_data="admin_keys")],
-            [InlineKeyboardButton("🏠 العودة للرئيسية", callback_data="back_home")]
-        ]
-        await update.message.reply_text("✅ <b>تم التحقق بنجاح!</b>\nاختر الإجراء المطلوب:", 
-                                       reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
-        return MENU
+        await update.message.reply_text("✅ تم التحقق بنجاح! أرسل /start لفتح خيارات الإدارة.")
+        return ConversationHandler.END
     else:
         await update.message.reply_text("❌ كلمة مرور خاطئة. حاول مرة أخرى:")
         return AUTH_ADMIN
 
-# --- ميزة إضافة أو تبديل معلومات القسم ---
-async def manage_keys_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin_panel_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    keyboard = [
+        [InlineKeyboardButton("🗑️ حذف أفلام من Mux", callback_data="admin_del")],
+        [InlineKeyboardButton("🔑 تحديث/إضافة مفاتيح", callback_data="admin_keys")],
+        [InlineKeyboardButton("🏠 العودة", callback_data="back_home")]
+    ]
+    await query.edit_message_text("⚙️ <b>إدارة النظام:</b>", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
+    return MENU
+
+# --- تحديث المفاتيح في MongoDB ---
+async def manage_keys_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    global MUX_SECTIONS
+    MUX_SECTIONS = load_mux_keys()
+    
     buttons = [InlineKeyboardButton(f"تعديل {i}", callback_data=f"set_{i}") for i in MUX_SECTIONS.keys()]
     keyboard = [buttons[i:i+3] for i in range(0, len(buttons), 3)]
-    keyboard.append([InlineKeyboardButton("➕ إضافة قسم (بيئة جديدة)", callback_data="set_new")])
+    keyboard.append([InlineKeyboardButton("➕ إضافة قسم جديد", callback_data="set_new")])
     keyboard.append([InlineKeyboardButton("🏠 عودة", callback_data="back_home")])
-    await query.edit_message_text("🔑 <b>إدارة مفاتيح Mux:</b>", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
+    
+    await query.edit_message_text("🔑 <b>تعديل بيانات الأقسام:</b>", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
     return SELECT_SET_SEC
 
-async def finalize_keys_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def ask_for_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data = query.data.split("_")[1]
+    context.user_data['target_sec'] = str(len(MUX_SECTIONS) + 1) if data == "new" else data
+    await query.edit_message_text(f"📍 القسم {context.user_data['target_sec']}: أرسل <b>Access Token ID</b> الجديد:", parse_mode=ParseMode.HTML)
+    return INPUT_ID
+
+async def ask_for_secret(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['new_id'] = update.message.text
+    await update.message.reply_text("تم الاستلام. أرسل الآن <b>Secret Key</b> الجديد:", parse_mode=ParseMode.HTML)
+    return INPUT_SECRET
+
+async def save_keys_to_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
     new_secret = update.message.text
-    s_id, access_id = context.user_data['target_sec'], context.user_data['new_access_id']
-    # الحفظ في MongoDB لضمان عدم الضياع
-    sections_col.update_one({"section_id": s_id}, {"$set": {"id": access_id, "secret": new_secret}}, upsert=True)
-    global MUX_SECTIONS
-    MUX_SECTIONS = load_mux_keys() # تحديث فوري
-    await update.message.reply_text(f"✅ تم تحديث القسم {s_id} وحفظه في القاعدة!")
+    s_id = context.user_data['target_sec']
+    new_id = context.user_data['new_id']
+    
+    sections_col.update_one(
+        {"section_id": s_id},
+        {"$set": {"id": new_id, "secret": new_secret}},
+        upsert=True
+    )
+    await update.message.reply_text(f"✅ تم حفظ بيانات القسم {s_id} في MongoDB بنجاح!")
     return await start(update, context)
 
-# --- ميزة حذف الفيديوهات نهائياً ---
-async def delete_vid_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# --- حذف الأفلام من Mux ---
+async def list_del_sections(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    buttons = [InlineKeyboardButton(f"القسم {i}", callback_data=f"dsec_{i}") for i in MUX_SECTIONS.keys()]
+    keyboard = [buttons[i:i+3] for i in range(0, len(buttons), 3)]
+    await query.edit_message_text("🗑️ اختر القسم للحذف منه:", reply_markup=InlineKeyboardMarkup(keyboard))
+    return SELECT_DEL_SEC
+
+async def list_videos_to_kill(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     s_id = query.data.split("_")[1]
-    creds = MUX_SECTIONS.get(s_id)
     context.user_data['del_sec'] = s_id
+    creds = MUX_SECTIONS[s_id]
+    
     res = requests.get("https://api.mux.com/video/v1/assets", auth=(creds["id"], creds["secret"]))
     assets = res.json().get("data", [])
+    
     if not assets:
-        await query.edit_message_text("📁 هذا القسم فارغ.")
+        await query.edit_message_text("📁 هذا القسم فارغ حالياً.")
         return MENU
+        
     keyboard = [[InlineKeyboardButton(f"❌ {a.get('passthrough', 'فيلم')}", callback_data=f"kill_{a['id']}")] for a in assets]
     keyboard.append([InlineKeyboardButton("🏠 إلغاء", callback_data="back_home")])
-    await query.edit_message_text("⚠️ اختر الفيلم لحذفه نهائياً من Mux:", reply_markup=InlineKeyboardMarkup(keyboard))
+    await query.edit_message_text("⚠️ اختر الفيديو لحذفه نهائياً:", reply_markup=InlineKeyboardMarkup(keyboard))
     return SELECT_DEL_VID
 
-# --- معالج القوائم والرفع ---
-async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def execute_kill(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    v_id = query.data.split("_")[1]
+    s_id = context.user_data['del_sec']
+    creds = MUX_SECTIONS[s_id]
+    
+    requests.delete(f"https://api.mux.com/video/v1/assets/{v_id}", auth=(creds["id"], creds["secret"]))
+    await query.answer("✅ تم الحذف من Mux بنجاح!", show_alert=True)
+    return await start(update, context)
+
+# --- معالجات الرفع والمراجعة ---
+async def handle_menu_clicks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if query.data == "nav_admin":
+    
+    if query.data == "nav_upload":
+        buttons = [InlineKeyboardButton(f"القسم {i}", callback_data=f"up_{i}") for i in MUX_SECTIONS.keys()]
+        keyboard = [buttons[i:i+3] for i in range(0, len(buttons), 3)]
+        await query.edit_message_text("📤 اختر قسم الرفع:", reply_markup=InlineKeyboardMarkup(keyboard))
+        return SELECT_UP
+        
+    elif query.data == "nav_admin":
         if context.user_data.get('is_auth'):
-            return await manage_keys_select(update, context)
-        else:
-            await query.edit_message_text("🔐 أرسل كلمة المرور (1460) للمتابعة:")
-            return AUTH_ADMIN
-    elif query.data == "back_home":
-        return await start(update, context)
+            return await admin_panel_selection(update, context)
+        await query.edit_message_text("🔐 أرسل كلمة المرور (1460):")
+        return AUTH_ADMIN
 
+# --- تشغيل البوت ---
 if __name__ == '__main__':
     app = ApplicationBuilder().token(BOT_TOKEN).build()
+    
     conv = ConversationHandler(
         entry_points=[CommandHandler('start', start), CallbackQueryHandler(start, pattern="back_home")],
         states={
-            MENU: [CallbackQueryHandler(menu_handler)],
+            MENU: [CallbackQueryHandler(handle_menu_clicks), 
+                   CallbackQueryHandler(manage_keys_menu, pattern="admin_keys"),
+                   CallbackQueryHandler(list_del_sections, pattern="admin_del")],
             AUTH_ADMIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, auth_handler)],
-            SELECT_SET_SEC: [CallbackQueryHandler(lambda u,c: (c.user_data.update({'target_sec': str(len(MUX_SECTIONS)+1) if u.callback_query.data=='set_new' else u.callback_query.data.split('_')[1]}), u.callback_query.edit_message_text("أرسل Access Token ID:"))[1], pattern="^set_")],
-            INPUT_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, lambda u,c: (c.user_data.update({'new_access_id': u.message.text}), u.message.reply_text("أرسل Secret Key:"))[1])],
-            INPUT_SECRET: [MessageHandler(filters.TEXT & ~filters.COMMAND, finalize_keys_save)],
-            SELECT_DEL_VID: [CallbackQueryHandler(lambda u,c: requests.delete(f"https://api.mux.com/video/v1/assets/{u.callback_query.data.split('_')[1]}", auth=(MUX_SECTIONS[c.user_data['del_sec']]['id'], MUX_SECTIONS[c.user_data['del_sec']]['secret'])).status_code and u.callback_query.answer("✅ تم الحذف!", show_alert=True), pattern="^kill_")],
+            SELECT_SET_SEC: [CallbackQueryHandler(ask_for_id, pattern="^set_")],
+            INPUT_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_for_secret)],
+            INPUT_SECRET: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_keys_to_db)],
+            SELECT_DEL_SEC: [CallbackQueryHandler(list_videos_to_kill, pattern="^dsec_")],
+            SELECT_DEL_VID: [CallbackQueryHandler(execute_kill, pattern="^kill_")],
         },
-        fallbacks=[CommandHandler('start', start)]
+        fallbacks=[CommandHandler('start', start)],
+        allow_reentry=True
     )
+    
     app.add_handler(conv)
     app.run_polling()
