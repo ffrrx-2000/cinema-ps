@@ -41,7 +41,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("📤 رفع فيديو جديد", callback_data="nav_upload")],
         [InlineKeyboardButton("🎬 مراجعة أفلامك", callback_data="nav_review")],
-        [InlineKeyboardButton("⚙️ قسم الإدارة (1460)", callback_data="nav_admin")]
+        [InlineKeyboardButton("⚙️ قسم الإدارة (الادمن)", callback_data="nav_admin")]
     ]
     text = "🎬 <b>لوحة تحكم سينما بلاس الاحترافية</b>\nالنظام مرتبط بقاعدة البيانات ومؤمن بالكامل ✅"
     if update.message:
@@ -161,3 +161,4 @@ if __name__ == '__main__':
     )
     app.add_handler(conv)
     app.run_polling()
+
