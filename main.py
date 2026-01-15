@@ -1,4 +1,3 @@
-
 import os
 import requests
 import asyncio
@@ -11,11 +10,11 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 
 # --- 1. الإعدادات ---
-MONGO_URL = os.getenv("MONGO_URL") # تأكد أنه يبدأ بـ mongodb صغير في Koyeb
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+MONGO_URL = os.getenv("MONGO_URL") #
+BOT_TOKEN = os.getenv("BOT_TOKEN") #
 ADMIN_PASSWORD = "1460"
 
-# --- الأقسام الثابتة (بياناتك الأصلية) ---
+# الأقسام الثابتة الأصلية
 MUX_SECTIONS_FIXED = {
     str(i): {"id": id_val, "secret": secret_val} for i, (id_val, secret_val) in enumerate([
         ("2ab8ed37-b8af-4ffa-ab78-bc0910fcac6e", "zkX7I4isPxeMz6tFh20vFt37sNOWPpPgaMpH0u7i2dvavEMea84Wob8UfFvIVouNcfzjpIgt7jl"),
@@ -45,15 +44,15 @@ def get_all_mux():
 
 # --- 3. حالات المحادثة ---
 (MENU, AUTH_ADMIN, ADMIN_HOME, SELECT_UP, SELECT_REV, 
- NAMING, LINKING, ADD_SEC_ID, ADD_SEC_SECRET, SELECT_DEL_VID) = range(10)
+ NAMING, LINKING, ADD_SEC_ID, ADD_SEC_SECRET) = range(9)
 
-# --- 4. وظائف البوت المصلحة ---
+# --- 4. الوظائف المصلحة ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("📤 رفع فيلم", callback_data="nav_up"), InlineKeyboardButton("🎬 مراجعة", callback_data="nav_rev")],
         [InlineKeyboardButton("📊 فحص السعة", callback_data="nav_stats")],
-        [InlineKeyboardButton("⚙️ الإدارة (1460)", callback_data="nav_adm")]
+        [InlineKeyboardButton("⚙️ الإدارة", callback_data="nav_adm")]
     ]
     text = "🎬 <b>لوحة تحكم سينما بلاس الموحدة</b>\nتم إصلاح مسارات الرفع وإضافة الأقسام بنجاح ✅"
     if update.message:
@@ -62,7 +61,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
     return MENU
 
-# --- إصلاح نظام الرفع (Upload Flow) ---
+# --- إصلاح نظام الرفع المتتالي ---
 async def start_upload_process(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     context.user_data['up_sec'] = query.data.split("_")[1]
@@ -86,43 +85,50 @@ async def process_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if res.status_code == 201:
         pid = res.json()["data"]["playback_ids"][0]["id"]
-        await msg.edit_text(f"✅ تم الرفع بنجاح!\nالفيلم: {v_name}\nالكود: <code>{pid}</code>", parse_mode=ParseMode.HTML)
+        # العودة لحالة NAMING للسماح برفع فيلم آخر مباشرة كما طلبت
+        await msg.edit_text(f"✅ تم الرفع بنجاح!\nالفيلم: {v_name}\nالكود: <code>{pid}</code>\n\n<b>أرسل اسم الفيلم التالي (أو /start للعودة):</b>", parse_mode=ParseMode.HTML)
+        return NAMING 
     else:
-        await msg.edit_text("❌ فشل الرفع. تأكد من الرابط أو مفاتيح القسم.")
-    return await start(update, context)
+        await msg.edit_text("❌ فشل الرفع. تأكد من الرابط. أرسل الاسم مجدداً للمحاولة:")
+        return NAMING
 
-# --- إصلاح نظام إضافة الأقسام (Add Section Flow) ---
+# --- نظام الإدارة المحمي والمخفي (1460) ---
+async def admin_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    u_pass = update.message.text
+    # حذف رسالة الرمز فوراً للأمان
+    try: await update.message.delete()
+    except: pass
+    
+    if u_pass == ADMIN_PASSWORD:
+        context.user_data['is_auth'] = True # تذكر تسجيل الدخول
+        keyboard = [[InlineKeyboardButton("➕ إضافة قسم سحابي", callback_data="adm_add")],
+                    [InlineKeyboardButton("🏠 خروج", callback_data="back_home")]]
+        await update.message.reply_text("✅ تم الدخول لقسم الإدارة بنجاح.", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
+        return ADMIN_HOME
+    else:
+        await update.message.reply_text("❌ كلمة مرور خاطئة.")
+        return MENU
+
 async def start_add_sec(update: Update, context: ContextTypes.DEFAULT_TYPE):
     all_m = get_all_mux()
     next_id = str(max([int(k) for k in all_m.keys()]) + 1)
-    context.user_data['new_id'] = next_id
+    context.user_data['new_sec_num'] = next_id
     await update.callback_query.edit_message_text(f"➕ إضافة القسم رقم {next_id}\nأرسل الآن **Access Token ID**:")
     return ADD_SEC_ID
 
 async def process_sec_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['temp_id'] = update.message.text
+    context.user_data['temp_acc_id'] = update.message.text
     await update.message.reply_text("تم الاستلام. أرسل الآن **Secret Key**:")
     return ADD_SEC_SECRET
 
 async def process_sec_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     secret = update.message.text
-    s_id, acc_id = context.user_data['new_id'], context.user_data['temp_id']
+    s_id, acc_id = context.user_data['new_sec_num'], context.user_data['temp_acc_id']
+    # حفظ في MongoDB
     dyn_col.update_one({"section_id": s_id}, {"$set": {"id": acc_id, "secret": secret}}, upsert=True)
     await update.message.reply_text(f"✅ تم حفظ وتفعيل القسم {s_id} في MongoDB!")
     return await start(update, context)
 
-# --- نظام الحماية المطور ---
-async def admin_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    u_pass = update.message.text
-    await update.message.delete() # حذف كلمة السر للأمان
-    if u_pass == ADMIN_PASSWORD:
-        keyboard = [[InlineKeyboardButton("➕ إضافة قسم سحابي", callback_data="adm_add")],
-                    [InlineKeyboardButton("🏠 خروج", callback_data="back_home")]]
-        await update.message.reply_text("⚙️ <b>لوحة الإدارة</b>", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
-        return ADMIN_HOME
-    return MENU
-
-# --- معالج الملاحة الرئيسي ---
 async def navigate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -133,7 +139,13 @@ async def navigate(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("📤 اختر القسم للرفع:", reply_markup=InlineKeyboardMarkup(kb))
         return SELECT_UP
     elif q.data == "nav_adm":
-        await q.edit_message_text("🔐 أرسل كلمة المرور (الادارة):")
+        # تخطي الرمز إذا كان مسجلاً للدخول مسبقاً كما طلبت
+        if context.user_data.get('is_auth'):
+            keyboard = [[InlineKeyboardButton("➕ إضافة قسم سحابي", callback_data="adm_add")],
+                        [InlineKeyboardButton("🏠 خروج", callback_data="back_home")]]
+            await q.edit_message_text("⚙️ لوحة الإدارة:", reply_markup=InlineKeyboardMarkup(keyboard))
+            return ADMIN_HOME
+        await q.edit_message_text("🔐 أرسل كلمة المرور (سوف يتم حذفها تلقائياً):")
         return AUTH_ADMIN
     return MENU
 
