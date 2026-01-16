@@ -159,7 +159,10 @@ user_auth_cache = {}
     REVIEW_ACTIONS,
     SELECT_SECTION_PLAYBACK,
     SELECT_SECTION_CAPACITY,
-) = range(10)
+    SELECT_SECTION_DELETE,
+    SELECT_VIDEO_DELETE,
+    CONFIRM_DELETE,
+) = range(13)
 
 
 def is_user_authenticated(user_id: int, system: str) -> bool:
@@ -275,6 +278,7 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edi
     keyboard = [
         [InlineKeyboardButton("📤 رفع فيديو", callback_data="menu_upload")],
         [InlineKeyboardButton("🔍 مراجعة القسم", callback_data="menu_review")],
+        [InlineKeyboardButton("🗑️ حذف فيديو", callback_data="menu_delete")],
         [InlineKeyboardButton("🎞️ عرض معرفات التشغيل", callback_data="menu_playback")],
         [InlineKeyboardButton("📊 فحص السعة المباشر", callback_data="menu_capacity")],
         [InlineKeyboardButton("🔙 تبديل النظام", callback_data="menu_switch")],
@@ -308,6 +312,8 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await show_section_selector(update, context, "upload")
     elif action == "menu_review":
         return await show_section_selector(update, context, "review")
+    elif action == "menu_delete":
+        return await show_section_selector(update, context, "delete")
     elif action == "menu_playback":
         return await show_section_selector(update, context, "playback")
     elif action == "menu_capacity":
@@ -350,6 +356,7 @@ async def show_section_selector(update: Update, context: ContextTypes.DEFAULT_TY
     action_titles = {
         "upload": "📤 رفع فيديو",
         "review": "🔍 مراجعة القسم",
+        "delete": "🗑️ حذف فيديو",
         "playback": "🎞️ عرض معرفات التشغيل",
         "capacity": "📊 فحص السعة",
     }
@@ -364,6 +371,7 @@ async def show_section_selector(update: Update, context: ContextTypes.DEFAULT_TY
     state_mapping = {
         "upload": SELECT_SECTION_UPLOAD,
         "review": SELECT_SECTION_REVIEW,
+        "delete": SELECT_SECTION_DELETE,
         "playback": SELECT_SECTION_PLAYBACK,
         "capacity": SELECT_SECTION_CAPACITY,
     }
@@ -453,6 +461,10 @@ async def handle_video_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "input": video_url,
                 "playback_policy": ["public"],
                 "passthrough": video_name,
+                "mp4_support": "capped_1080p",
+                "meta": {
+                    "name": video_name,
+                },
             },
             auth=(creds["id"], creds["secret"]),
             timeout=30,
@@ -824,6 +836,193 @@ async def handle_capacity_section(update: Update, context: ContextTypes.DEFAULT_
         return MAIN_MENU
 
 
+async def handle_delete_section(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "menu_back":
+        return await show_main_menu(update, context, edit=True)
+
+    section_id = query.data.split("_")[2]
+    system = context.user_data.get("system")
+    sections = get_sections_for_system(system)
+    creds = sections[section_id]
+    system_name = get_system_name(system)
+
+    context.user_data["delete_section_id"] = section_id
+    context.user_data["delete_creds"] = creds
+
+    await query.edit_message_text(
+        f"⏳ <b>جاري جلب الفيديوهات من القسم {section_id}...</b>",
+        parse_mode=ParseMode.HTML,
+    )
+
+    try:
+        res = requests.get(
+            "https://api.mux.com/video/v1/assets",
+            auth=(creds["id"], creds["secret"]),
+            timeout=15,
+        )
+        assets = res.json().get("data", [])
+
+        if not assets:
+            keyboard = [[InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")]]
+            await query.edit_message_text(
+                f"📁 <b>القسم {section_id} فارغ</b>\n\n"
+                f"النظام: {system_name}\n"
+                "لا توجد فيديوهات للحذف في هذا القسم.",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.HTML,
+            )
+            return MAIN_MENU
+
+        context.user_data["delete_assets"] = assets
+
+        text = f"🗑️ <b>{system_name} - حذف من القسم {section_id}</b>\n"
+        text += f"📊 إجمالي الفيديوهات: {len(assets)}/10\n\n"
+        text += "<b>اختر الفيديو للحذف:</b>\n\n"
+
+        keyboard = []
+        for i, asset in enumerate(assets, 1):
+            name = asset.get("passthrough") or asset.get("meta", {}).get("name", "بدون عنوان")
+            if not name:
+                name = "بدون عنوان"
+            status = asset.get("status", "غير معروف")
+            asset_id = asset.get("id")
+            status_emoji = "✅" if status == "ready" else "⏳" if status == "preparing" else "❌"
+
+            text += f"{i}. {status_emoji} {name}\n"
+            keyboard.append([InlineKeyboardButton(f"🗑️ {i}. {name[:30]}", callback_data=f"delete_video_{asset_id}")])
+
+        keyboard.append([InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")])
+
+        await query.edit_message_text(
+            text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML
+        )
+        return SELECT_VIDEO_DELETE
+
+    except Exception as e:
+        keyboard = [[InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")]]
+        await query.edit_message_text(
+            f"⚠️ <b>خطأ في جلب البيانات</b>\n\n{str(e)}",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.HTML,
+        )
+        return MAIN_MENU
+
+
+async def handle_video_delete_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "menu_back":
+        return await show_main_menu(update, context, edit=True)
+
+    asset_id = query.data.replace("delete_video_", "")
+    assets = context.user_data.get("delete_assets", [])
+    
+    selected_asset = None
+    for asset in assets:
+        if asset.get("id") == asset_id:
+            selected_asset = asset
+            break
+
+    if not selected_asset:
+        await query.answer("⚠️ لم يتم العثور على الفيديو", show_alert=True)
+        return SELECT_VIDEO_DELETE
+
+    context.user_data["delete_asset_id"] = asset_id
+    video_name = selected_asset.get("passthrough") or selected_asset.get("meta", {}).get("name", "بدون عنوان")
+    if not video_name:
+        video_name = "بدون عنوان"
+    context.user_data["delete_video_name"] = video_name
+
+    section_id = context.user_data.get("delete_section_id")
+    system = context.user_data.get("system")
+    system_name = get_system_name(system)
+
+    keyboard = [
+        [InlineKeyboardButton("✅ نعم، احذف", callback_data="confirm_delete_yes")],
+        [InlineKeyboardButton("❌ لا، إلغاء", callback_data="confirm_delete_no")],
+    ]
+
+    await query.edit_message_text(
+        f"⚠️ <b>تأكيد الحذف</b>\n\n"
+        f"🎬 <b>النظام:</b> {system_name}\n"
+        f"📁 <b>القسم:</b> {section_id}\n"
+        f"🎥 <b>اسم الفيديو:</b> {video_name}\n\n"
+        f"<b>هل أنت متأكد من حذف هذا الفيديو؟</b>\n"
+        f"<i>⚠️ لا يمكن التراجع عن هذا الإجراء!</i>",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML,
+    )
+    return CONFIRM_DELETE
+
+
+async def handle_delete_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "confirm_delete_no":
+        return await show_main_menu(update, context, edit=True)
+
+    if query.data == "confirm_delete_yes":
+        asset_id = context.user_data.get("delete_asset_id")
+        creds = context.user_data.get("delete_creds")
+        video_name = context.user_data.get("delete_video_name")
+        section_id = context.user_data.get("delete_section_id")
+        system = context.user_data.get("system")
+        system_name = get_system_name(system)
+
+        await query.edit_message_text(
+            f"⏳ <b>جاري حذف الفيديو...</b>\n\n{video_name}",
+            parse_mode=ParseMode.HTML,
+        )
+
+        try:
+            response = requests.delete(
+                f"https://api.mux.com/video/v1/assets/{asset_id}",
+                auth=(creds["id"], creds["secret"]),
+                timeout=30,
+            )
+
+            if response.status_code == 204:
+                keyboard = [
+                    [InlineKeyboardButton("🗑️ حذف فيديو آخر", callback_data=f"section_delete_{section_id}")],
+                    [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
+                ]
+
+                await query.edit_message_text(
+                    f"✅ <b>تم الحذف بنجاح!</b>\n\n"
+                    f"🎬 <b>النظام:</b> {system_name}\n"
+                    f"📁 <b>القسم:</b> {section_id}\n"
+                    f"🎥 <b>الفيديو المحذوف:</b> {video_name}",
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode=ParseMode.HTML,
+                )
+                return MAIN_MENU
+            else:
+                error_msg = response.json().get("error", {}).get("message", "خطأ غير معروف")
+                keyboard = [[InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")]]
+                await query.edit_message_text(
+                    f"❌ <b>فشل الحذف</b>\n\n"
+                    f"الخطأ: {error_msg}\n"
+                    f"رمز الحالة: {response.status_code}",
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode=ParseMode.HTML,
+                )
+                return MAIN_MENU
+
+        except Exception as e:
+            keyboard = [[InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")]]
+            await query.edit_message_text(
+                f"⚠️ <b>خطأ</b>\n\n{str(e)}",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.HTML,
+            )
+            return MAIN_MENU
+
+
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "❌ <b>تم إلغاء العملية</b>\n\n" "استخدم /start للبدء من جديد.",
@@ -856,6 +1055,7 @@ def main():
                 CallbackQueryHandler(main_menu_handler, pattern="^menu_"),
                 CallbackQueryHandler(handle_upload_section, pattern="^section_upload_"),
                 CallbackQueryHandler(handle_review_section, pattern="^section_review_"),
+                CallbackQueryHandler(handle_delete_section, pattern="^section_delete_"),
                 CallbackQueryHandler(handle_playback_section, pattern="^section_playback_"),
                 CallbackQueryHandler(handle_capacity_section, pattern="^section_capacity_|^capacity_"),
             ],
@@ -883,6 +1083,17 @@ def main():
             SELECT_SECTION_CAPACITY: [
                 CallbackQueryHandler(handle_capacity_section, pattern="^section_capacity_|^capacity_"),
                 CallbackQueryHandler(main_menu_handler, pattern="^menu_back$"),
+            ],
+            SELECT_SECTION_DELETE: [
+                CallbackQueryHandler(handle_delete_section, pattern="^section_delete_"),
+                CallbackQueryHandler(main_menu_handler, pattern="^menu_back$"),
+            ],
+            SELECT_VIDEO_DELETE: [
+                CallbackQueryHandler(handle_video_delete_selection, pattern="^delete_video_"),
+                CallbackQueryHandler(main_menu_handler, pattern="^menu_back$"),
+            ],
+            CONFIRM_DELETE: [
+                CallbackQueryHandler(handle_delete_confirmation, pattern="^confirm_delete_"),
             ],
         },
         fallbacks=[
