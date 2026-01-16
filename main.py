@@ -196,21 +196,21 @@ def get_password_for_system(system: str) -> str:
 
 def get_system_name(system: str) -> str:
     if system == "cinema_plus":
-        return "Cinema Plus"
+        return "سينما بلس"
     elif system == "shoof_play":
-        return "Shoof Play"
+        return "شوف بلاي"
     return ""
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     keyboard = [
-        [InlineKeyboardButton("🎬 Cinema Plus", callback_data="system_cinema_plus")],
-        [InlineKeyboardButton("📺 Shoof Play", callback_data="system_shoof_play")],
+        [InlineKeyboardButton("🎬 سينما بلس", callback_data="system_cinema_plus")],
+        [InlineKeyboardButton("📺 شوف بلاي", callback_data="system_shoof_play")],
     ]
     await update.message.reply_text(
-        "🎬 <b>Welcome to Video Management Bot</b>\n\n"
-        "Please select a system to access:",
+        "🎬 <b>مرحباً بك في بوت إدارة الفيديوهات</b>\n\n"
+        "الرجاء اختيار النظام للدخول:",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.HTML,
     )
@@ -230,8 +230,8 @@ async def select_system(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     system_name = get_system_name(system)
     await query.edit_message_text(
-        f"🔐 <b>{system_name} Authentication</b>\n\n"
-        "Please enter the password to access this system:",
+        f"🔐 <b>تسجيل الدخول - {system_name}</b>\n\n"
+        "الرجاء إدخال كلمة المرور للدخول إلى هذا النظام:",
         parse_mode=ParseMode.HTML,
     )
     return AUTH_PASSWORD
@@ -252,15 +252,15 @@ async def handle_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
         authenticate_user(user_id, system)
         system_name = get_system_name(system)
         await update.message.reply_text(
-            f"✅ <b>Authentication Successful!</b>\n\n"
-            f"Welcome to {system_name}. Your session is valid for 48 hours.",
+            f"✅ <b>تم تسجيل الدخول بنجاح!</b>\n\n"
+            f"مرحباً بك في {system_name}. جلستك صالحة لمدة 48 ساعة.",
             parse_mode=ParseMode.HTML,
         )
         return await show_main_menu(update, context, edit=False)
     else:
         await update.message.reply_text(
-            "❌ <b>Incorrect Password</b>\n\n"
-            "Please try again or use /start to select a different system.",
+            "❌ <b>كلمة المرور غير صحيحة</b>\n\n"
+            "الرجاء المحاولة مرة أخرى أو استخدام /start لاختيار نظام آخر.",
             parse_mode=ParseMode.HTML,
         )
         return AUTH_PASSWORD
@@ -273,18 +273,18 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edi
     section_count = len(sections)
 
     keyboard = [
-        [InlineKeyboardButton("📤 Upload Video", callback_data="menu_upload")],
-        [InlineKeyboardButton("🔍 Review Section", callback_data="menu_review")],
-        [InlineKeyboardButton("🎞️ Show Playback IDs", callback_data="menu_playback")],
-        [InlineKeyboardButton("📊 Live Capacity Check", callback_data="menu_capacity")],
-        [InlineKeyboardButton("🔙 Switch System", callback_data="menu_switch")],
+        [InlineKeyboardButton("📤 رفع فيديو", callback_data="menu_upload")],
+        [InlineKeyboardButton("🔍 مراجعة القسم", callback_data="menu_review")],
+        [InlineKeyboardButton("🎞️ عرض معرفات التشغيل", callback_data="menu_playback")],
+        [InlineKeyboardButton("📊 فحص السعة المباشر", callback_data="menu_capacity")],
+        [InlineKeyboardButton("🔙 تبديل النظام", callback_data="menu_switch")],
     ]
 
     text = (
-        f"🎬 <b>{system_name} Management</b>\n\n"
-        f"📁 Total Sections: {section_count}\n"
-        f"🔐 Session Active: 48 hours\n\n"
-        "Select an action:"
+        f"🎬 <b>إدارة {system_name}</b>\n\n"
+        f"📁 إجمالي الأقسام: {section_count}\n"
+        f"🔐 الجلسة نشطة: 48 ساعة\n\n"
+        "اختر إجراء:"
     )
 
     if edit:
@@ -314,11 +314,11 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await show_section_selector(update, context, "capacity")
     elif action == "menu_switch":
         keyboard = [
-            [InlineKeyboardButton("🎬 Cinema Plus", callback_data="system_cinema_plus")],
-            [InlineKeyboardButton("📺 Shoof Play", callback_data="system_shoof_play")],
+            [InlineKeyboardButton("🎬 سينما بلس", callback_data="system_cinema_plus")],
+            [InlineKeyboardButton("📺 شوف بلاي", callback_data="system_shoof_play")],
         ]
         await query.edit_message_text(
-            "🎬 <b>Select a System</b>",
+            "🎬 <b>اختر النظام</b>",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode=ParseMode.HTML,
         )
@@ -339,24 +339,24 @@ async def show_section_selector(update: Update, context: ContextTypes.DEFAULT_TY
     row = []
     for i, section_id in enumerate(sections.keys(), 1):
         callback_data = f"section_{action_type}_{section_id}"
-        row.append(InlineKeyboardButton(f"Section {section_id}", callback_data=callback_data))
+        row.append(InlineKeyboardButton(f"قسم {section_id}", callback_data=callback_data))
         if i % 5 == 0:
             keyboard.append(row)
             row = []
     if row:
         keyboard.append(row)
-    keyboard.append([InlineKeyboardButton("🔙 Back to Menu", callback_data="menu_back")])
+    keyboard.append([InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")])
 
     action_titles = {
-        "upload": "📤 Upload Video",
-        "review": "🔍 Review Section",
-        "playback": "🎞️ Show Playback IDs",
-        "capacity": "📊 Capacity Check",
+        "upload": "📤 رفع فيديو",
+        "review": "🔍 مراجعة القسم",
+        "playback": "🎞️ عرض معرفات التشغيل",
+        "capacity": "📊 فحص السعة",
     }
 
     await query.edit_message_text(
         f"<b>{action_titles[action_type]} - {system_name}</b>\n\n"
-        "Select a section:",
+        "اختر القسم:",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.HTML,
     )
@@ -392,24 +392,24 @@ async def handle_upload_section(update: Update, context: ContextTypes.DEFAULT_TY
         count = len(assets)
     except Exception as e:
         await query.edit_message_text(
-            f"⚠️ <b>Connection Error</b>\n\nFailed to connect to Mux API: {str(e)}\n\n"
-            "Use /start to try again.",
+            f"⚠️ <b>خطأ في الاتصال</b>\n\nفشل الاتصال بـ Mux API: {str(e)}\n\n"
+            "استخدم /start للمحاولة مرة أخرى.",
             parse_mode=ParseMode.HTML,
         )
         return ConversationHandler.END
 
     if count >= 10:
-        await query.answer("⚠️ Section is full (10/10 videos)", show_alert=True)
+        await query.answer("⚠️ القسم ممتلئ (10/10 فيديو)", show_alert=True)
         return SELECT_SECTION_UPLOAD
 
     context.user_data["section_id"] = section_id
     context.user_data["section_creds"] = creds
 
     await query.edit_message_text(
-        f"📤 <b>Upload to Section {section_id}</b>\n\n"
-        f"📊 Current Capacity: {count}/10\n"
-        f"📁 Available Slots: {10 - count}\n\n"
-        "<b>Please enter the video name:</b>",
+        f"📤 <b>الرفع إلى القسم {section_id}</b>\n\n"
+        f"📊 السعة الحالية: {count}/10\n"
+        f"📁 الأماكن المتاحة: {10 - count}\n\n"
+        "<b>الرجاء إدخال اسم الفيديو:</b>",
         parse_mode=ParseMode.HTML,
     )
     return ENTER_VIDEO_NAME
@@ -420,8 +420,8 @@ async def handle_video_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["video_name"] = video_name
 
     await update.message.reply_text(
-        f"📝 <b>Video Name:</b> {video_name}\n\n"
-        "<b>Now please send the video URL:</b>",
+        f"📝 <b>اسم الفيديو:</b> {video_name}\n\n"
+        "<b>الآن أرسل رابط الفيديو:</b>",
         parse_mode=ParseMode.HTML,
     )
     return ENTER_VIDEO_LINK
@@ -441,8 +441,8 @@ async def handle_video_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
     status_msg = await update.message.reply_text(
-        "⏳ <b>Uploading to Mux...</b>\n\n"
-        "Please wait while we process your video.",
+        "⏳ <b>جاري الرفع إلى Mux...</b>\n\n"
+        "الرجاء الانتظار بينما نعالج الفيديو الخاص بك.",
         parse_mode=ParseMode.HTML,
     )
 
@@ -462,21 +462,21 @@ async def handle_video_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
             res_data = response.json()["data"]
             asset_id = res_data["id"]
             playback_ids = res_data.get("playback_ids", [])
-            playback_id = playback_ids[0]["id"] if playback_ids else "Pending..."
+            playback_id = playback_ids[0]["id"] if playback_ids else "قيد الانتظار..."
 
             keyboard = [
-                [InlineKeyboardButton("📤 Upload Another", callback_data=f"section_upload_{section_id}")],
-                [InlineKeyboardButton("🔙 Back to Menu", callback_data="menu_back")],
+                [InlineKeyboardButton("📤 رفع فيديو آخر", callback_data=f"section_upload_{section_id}")],
+                [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
             ]
 
             await status_msg.edit_text(
-                f"✅ <b>Upload Successful!</b>\n\n"
-                f"🎬 <b>System:</b> {system_name}\n"
-                f"📁 <b>Section:</b> {section_id}\n"
-                f"🎥 <b>Video Name:</b> {video_name}\n"
-                f"🆔 <b>Asset ID:</b>\n<code>{asset_id}</code>\n"
-                f"🔑 <b>Playback ID:</b>\n<code>{playback_id}</code>\n\n"
-                "<i>Tracking asset status...</i>",
+                f"✅ <b>تم الرفع بنجاح!</b>\n\n"
+                f"🎬 <b>النظام:</b> {system_name}\n"
+                f"📁 <b>القسم:</b> {section_id}\n"
+                f"🎥 <b>اسم الفيديو:</b> {video_name}\n"
+                f"🆔 <b>معرف الأصل:</b>\n<code>{asset_id}</code>\n"
+                f"🔑 <b>معرف التشغيل:</b>\n<code>{playback_id}</code>\n\n"
+                "<i>جاري تتبع حالة الأصل...</i>",
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode=ParseMode.HTML,
             )
@@ -494,18 +494,18 @@ async def handle_video_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             return MAIN_MENU
         else:
-            error_msg = response.json().get("error", {}).get("message", "Unknown error")
+            error_msg = response.json().get("error", {}).get("message", "خطأ غير معروف")
             await status_msg.edit_text(
-                f"❌ <b>Upload Failed</b>\n\n"
-                f"Error: {error_msg}\n"
-                f"Status Code: {response.status_code}\n\n"
-                "Use /start to try again.",
+                f"❌ <b>فشل الرفع</b>\n\n"
+                f"الخطأ: {error_msg}\n"
+                f"رمز الحالة: {response.status_code}\n\n"
+                "استخدم /start للمحاولة مرة أخرى.",
                 parse_mode=ParseMode.HTML,
             )
             return ConversationHandler.END
     except Exception as e:
         await status_msg.edit_text(
-            f"⚠️ <b>Error</b>\n\n{str(e)}\n\n" "Use /start to try again.",
+            f"⚠️ <b>خطأ</b>\n\n{str(e)}\n\n" "استخدم /start للمحاولة مرة أخرى.",
             parse_mode=ParseMode.HTML,
         )
         return ConversationHandler.END
@@ -527,10 +527,10 @@ async def track_asset_status(chat_id, bot, asset_id, creds, video_name, playback
                     await bot.send_message(
                         chat_id=chat_id,
                         text=(
-                            f"✨ <b>Video Ready!</b>\n\n"
-                            f"🎥 <b>Video:</b> {video_name}\n"
-                            f"✅ <b>Status:</b> Ready for playback\n"
-                            f"🔑 <b>Playback ID:</b>\n<code>{final_playback_id}</code>"
+                            f"✨ <b>الفيديو جاهز!</b>\n\n"
+                            f"🎥 <b>الفيديو:</b> {video_name}\n"
+                            f"✅ <b>الحالة:</b> جاهز للتشغيل\n"
+                            f"🔑 <b>معرف التشغيل:</b>\n<code>{final_playback_id}</code>"
                         ),
                         parse_mode=ParseMode.HTML,
                     )
@@ -539,9 +539,9 @@ async def track_asset_status(chat_id, bot, asset_id, creds, video_name, playback
                     await bot.send_message(
                         chat_id=chat_id,
                         text=(
-                            f"❌ <b>Video Processing Failed</b>\n\n"
-                            f"🎥 <b>Video:</b> {video_name}\n"
-                            f"Please check the source URL and try again."
+                            f"❌ <b>فشلت معالجة الفيديو</b>\n\n"
+                            f"🎥 <b>الفيديو:</b> {video_name}\n"
+                            f"الرجاء التحقق من رابط المصدر والمحاولة مرة أخرى."
                         ),
                         parse_mode=ParseMode.HTML,
                     )
@@ -567,7 +567,7 @@ async def handle_review_section(update: Update, context: ContextTypes.DEFAULT_TY
     context.user_data["review_creds"] = creds
 
     await query.edit_message_text(
-        f"⏳ <b>Fetching assets from Section {section_id}...</b>",
+        f"⏳ <b>جاري جلب الأصول من القسم {section_id}...</b>",
         parse_mode=ParseMode.HTML,
     )
 
@@ -580,41 +580,42 @@ async def handle_review_section(update: Update, context: ContextTypes.DEFAULT_TY
         assets = res.json().get("data", [])
 
         if not assets:
-            keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data="menu_back")]]
+            keyboard = [[InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")]]
             await query.edit_message_text(
-                f"📁 <b>Section {section_id} is empty</b>\n\n"
-                f"System: {system_name}\n"
-                "No videos found in this section.",
+                f"📁 <b>القسم {section_id} فارغ</b>\n\n"
+                f"النظام: {system_name}\n"
+                "لا توجد فيديوهات في هذا القسم.",
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode=ParseMode.HTML,
             )
             return MAIN_MENU
 
-        text = f"📂 <b>{system_name} - Section {section_id}</b>\n"
-        text += f"📊 Total Videos: {len(assets)}/10\n\n"
+        text = f"📂 <b>{system_name} - القسم {section_id}</b>\n"
+        text += f"📊 إجمالي الفيديوهات: {len(assets)}/10\n\n"
 
         all_playback_ids = []
         for i, asset in enumerate(assets, 1):
-            name = asset.get("passthrough", "Untitled")
-            status = asset.get("status", "unknown")
-            asset_id = asset.get("id", "N/A")
+            name = asset.get("passthrough", "بدون عنوان")
+            status = asset.get("status", "غير معروف")
+            asset_id = asset.get("id", "غير متوفر")
             playback_ids = asset.get("playback_ids", [])
-            p_id = playback_ids[0]["id"] if playback_ids else "N/A"
+            p_id = playback_ids[0]["id"] if playback_ids else "غير متوفر"
 
             status_emoji = "✅" if status == "ready" else "⏳" if status == "preparing" else "❌"
+            status_ar = "جاهز" if status == "ready" else "قيد التحضير" if status == "preparing" else "خطأ"
 
             text += f"<b>{i}. {name}</b>\n"
-            text += f"   Status: {status_emoji} {status}\n"
-            text += f"   Playback: <code>{p_id}</code>\n\n"
+            text += f"   الحالة: {status_emoji} {status_ar}\n"
+            text += f"   معرف التشغيل: <code>{p_id}</code>\n\n"
 
-            if p_id != "N/A":
+            if p_id != "غير متوفر":
                 all_playback_ids.append(p_id)
 
         context.user_data["all_playback_ids"] = all_playback_ids
 
         keyboard = [
-            [InlineKeyboardButton("📋 Copy All Playback IDs", callback_data="review_copy_all")],
-            [InlineKeyboardButton("🔙 Back to Menu", callback_data="menu_back")],
+            [InlineKeyboardButton("📋 نسخ جميع معرفات التشغيل", callback_data="review_copy_all")],
+            [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
         ]
 
         await query.edit_message_text(
@@ -623,9 +624,9 @@ async def handle_review_section(update: Update, context: ContextTypes.DEFAULT_TY
         return REVIEW_ACTIONS
 
     except Exception as e:
-        keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data="menu_back")]]
+        keyboard = [[InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")]]
         await query.edit_message_text(
-            f"⚠️ <b>Error fetching data</b>\n\n{str(e)}",
+            f"⚠️ <b>خطأ في جلب البيانات</b>\n\n{str(e)}",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode=ParseMode.HTML,
         )
@@ -644,11 +645,11 @@ async def handle_review_actions(update: Update, context: ContextTypes.DEFAULT_TY
         if all_ids:
             ids_text = "\n".join(all_ids)
             await query.message.reply_text(
-                f"📋 <b>All Playback IDs:</b>\n\n<code>{ids_text}</code>",
+                f"📋 <b>جميع معرفات التشغيل:</b>\n\n<code>{ids_text}</code>",
                 parse_mode=ParseMode.HTML,
             )
         else:
-            await query.answer("No playback IDs available", show_alert=True)
+            await query.answer("لا توجد معرفات تشغيل متاحة", show_alert=True)
         return REVIEW_ACTIONS
 
 
@@ -666,7 +667,7 @@ async def handle_playback_section(update: Update, context: ContextTypes.DEFAULT_
     system_name = get_system_name(system)
 
     await query.edit_message_text(
-        f"⏳ <b>Fetching playback IDs from Section {section_id}...</b>",
+        f"⏳ <b>جاري جلب معرفات التشغيل من القسم {section_id}...</b>",
         parse_mode=ParseMode.HTML,
     )
 
@@ -679,30 +680,30 @@ async def handle_playback_section(update: Update, context: ContextTypes.DEFAULT_
         assets = res.json().get("data", [])
 
         if not assets:
-            keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data="menu_back")]]
+            keyboard = [[InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")]]
             await query.edit_message_text(
-                f"📁 <b>Section {section_id} is empty</b>\n\n" "No playback IDs to display.",
+                f"📁 <b>القسم {section_id} فارغ</b>\n\n" "لا توجد معرفات تشغيل لعرضها.",
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode=ParseMode.HTML,
             )
             return MAIN_MENU
 
-        text = f"🎞️ <b>{system_name} - Section {section_id} Playback IDs</b>\n\n"
+        text = f"🎞️ <b>{system_name} - معرفات التشغيل للقسم {section_id}</b>\n\n"
         all_ids = []
 
         for i, asset in enumerate(assets, 1):
-            name = asset.get("passthrough", "Untitled")
+            name = asset.get("passthrough", "بدون عنوان")
             playback_ids = asset.get("playback_ids", [])
-            p_id = playback_ids[0]["id"] if playback_ids else "N/A"
+            p_id = playback_ids[0]["id"] if playback_ids else "غير متوفر"
 
             text += f"<b>{i}. {name}</b>\n<code>{p_id}</code>\n\n"
-            if p_id != "N/A":
+            if p_id != "غير متوفر":
                 all_ids.append(p_id)
 
-        keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data="menu_back")]]
+        keyboard = [[InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")]]
 
         if all_ids:
-            text += f"\n<b>Quick Copy (All IDs):</b>\n<code>{chr(10).join(all_ids)}</code>"
+            text += f"\n<b>نسخ سريع (جميع المعرفات):</b>\n<code>{chr(10).join(all_ids)}</code>"
 
         await query.edit_message_text(
             text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML
@@ -710,9 +711,9 @@ async def handle_playback_section(update: Update, context: ContextTypes.DEFAULT_
         return MAIN_MENU
 
     except Exception as e:
-        keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data="menu_back")]]
+        keyboard = [[InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")]]
         await query.edit_message_text(
-            f"⚠️ <b>Error</b>\n\n{str(e)}",
+            f"⚠️ <b>خطأ</b>\n\n{str(e)}",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode=ParseMode.HTML,
         )
@@ -732,11 +733,11 @@ async def handle_capacity_section(update: Update, context: ContextTypes.DEFAULT_
         system_name = get_system_name(system)
 
         await query.edit_message_text(
-            f"⏳ <b>Checking all sections capacity...</b>\n\n" "This may take a moment.",
+            f"⏳ <b>جاري فحص سعة جميع الأقسام...</b>\n\n" "قد يستغرق هذا لحظة.",
             parse_mode=ParseMode.HTML,
         )
 
-        text = f"📊 <b>{system_name} - Live Capacity Report</b>\n\n"
+        text = f"📊 <b>{system_name} - تقرير السعة المباشر</b>\n\n"
         total_used = 0
         total_capacity = len(sections) * 10
 
@@ -749,16 +750,16 @@ async def handle_capacity_section(update: Update, context: ContextTypes.DEFAULT_
                 )
                 count = len(res.json().get("data", []))
                 total_used += count
-                status = "✅" if count < 10 else "⚠️ FULL"
+                status = "✅" if count < 10 else "⚠️ ممتلئ"
                 bar = "█" * count + "░" * (10 - count)
-                text += f"Section {section_id}: [{bar}] {count}/10 {status}\n"
+                text += f"القسم {section_id}: [{bar}] {count}/10 {status}\n"
             except:
-                text += f"Section {section_id}: ⚠️ Connection Error\n"
+                text += f"القسم {section_id}: ⚠️ خطأ في الاتصال\n"
 
-        text += f"\n<b>Total Usage:</b> {total_used}/{total_capacity}"
-        text += f"\n<b>Available Slots:</b> {total_capacity - total_used}"
+        text += f"\n<b>إجمالي الاستخدام:</b> {total_used}/{total_capacity}"
+        text += f"\n<b>الأماكن المتاحة:</b> {total_capacity - total_used}"
 
-        keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data="menu_back")]]
+        keyboard = [[InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")]]
         await query.edit_message_text(
             text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML
         )
@@ -771,7 +772,7 @@ async def handle_capacity_section(update: Update, context: ContextTypes.DEFAULT_
     system_name = get_system_name(system)
 
     await query.edit_message_text(
-        f"⏳ <b>Checking Section {section_id} capacity...</b>",
+        f"⏳ <b>جاري فحص سعة القسم {section_id}...</b>",
         parse_mode=ParseMode.HTML,
     )
 
@@ -785,24 +786,24 @@ async def handle_capacity_section(update: Update, context: ContextTypes.DEFAULT_
         count = len(assets)
 
         bar = "█" * count + "░" * (10 - count)
-        status = "✅ Available" if count < 10 else "⚠️ FULL"
+        status = "✅ متاح" if count < 10 else "⚠️ ممتلئ"
 
-        text = f"📊 <b>{system_name} - Section {section_id}</b>\n\n"
-        text += f"<b>Capacity:</b> [{bar}] {count}/10\n"
-        text += f"<b>Status:</b> {status}\n"
-        text += f"<b>Available Slots:</b> {10 - count}\n\n"
+        text = f"📊 <b>{system_name} - القسم {section_id}</b>\n\n"
+        text += f"<b>السعة:</b> [{bar}] {count}/10\n"
+        text += f"<b>الحالة:</b> {status}\n"
+        text += f"<b>الأماكن المتاحة:</b> {10 - count}\n\n"
 
         if assets:
-            text += "<b>Current Videos:</b>\n"
+            text += "<b>الفيديوهات الحالية:</b>\n"
             for i, asset in enumerate(assets, 1):
-                name = asset.get("passthrough", "Untitled")
-                asset_status = asset.get("status", "unknown")
+                name = asset.get("passthrough", "بدون عنوان")
+                asset_status = asset.get("status", "غير معروف")
                 emoji = "✅" if asset_status == "ready" else "⏳"
                 text += f"{i}. {emoji} {name}\n"
 
         keyboard = [
-            [InlineKeyboardButton("🔄 Check All Sections", callback_data="capacity_check_all")],
-            [InlineKeyboardButton("🔙 Back to Menu", callback_data="menu_back")],
+            [InlineKeyboardButton("🔄 فحص جميع الأقسام", callback_data="capacity_check_all")],
+            [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
         ]
 
         await query.edit_message_text(
@@ -811,9 +812,9 @@ async def handle_capacity_section(update: Update, context: ContextTypes.DEFAULT_
         return MAIN_MENU
 
     except Exception as e:
-        keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data="menu_back")]]
+        keyboard = [[InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")]]
         await query.edit_message_text(
-            f"⚠️ <b>Error</b>\n\n{str(e)}",
+            f"⚠️ <b>خطأ</b>\n\n{str(e)}",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode=ParseMode.HTML,
         )
@@ -822,7 +823,7 @@ async def handle_capacity_section(update: Update, context: ContextTypes.DEFAULT_
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "❌ <b>Operation Cancelled</b>\n\n" "Use /start to begin again.",
+        "❌ <b>تم إلغاء العملية</b>\n\n" "استخدم /start للبدء من جديد.",
         parse_mode=ParseMode.HTML,
     )
     return ConversationHandler.END
@@ -830,12 +831,12 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     if not BOT_TOKEN:
-        print("ERROR: BOT_TOKEN environment variable is not set!")
+        print("خطأ: متغير البيئة BOT_TOKEN غير مُعيّن!")
         return
 
-    print("Starting Video Management Bot...")
-    print(f"Cinema Plus: {len(CINEMA_PLUS_SECTIONS)} sections loaded")
-    print(f"Shoof Play: {len(SHOOF_PLAY_SECTIONS)} sections loaded")
+    print("جاري تشغيل بوت إدارة الفيديوهات...")
+    print(f"سينما بلس: تم تحميل {len(CINEMA_PLUS_SECTIONS)} أقسام")
+    print(f"شوف بلاي: تم تحميل {len(SHOOF_PLAY_SECTIONS)} أقسام")
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
