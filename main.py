@@ -458,13 +458,9 @@ async def handle_video_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response = requests.post(
             "https://api.mux.com/video/v1/assets",
             json={
-                "input": video_url,
+                "input": [{"url": video_url}],
                 "playback_policy": ["public"],
                 "passthrough": video_name,
-                "mp4_support": "capped_1080p",
-                "meta": {
-                    "name": video_name,
-                },
             },
             auth=(creds["id"], creds["secret"]),
             timeout=30,
