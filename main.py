@@ -320,7 +320,7 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             "🎬 <b>اختر النظام</b>",
             reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode=ParseMode.HTML,
+            parse_mode=ParseMode.HTML
         )
         return SELECT_SYSTEM
     elif action == "menu_back":
@@ -464,6 +464,8 @@ async def handle_video_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
             playback_ids = res_data.get("playback_ids", [])
             playback_id = playback_ids[0]["id"] if playback_ids else "قيد الانتظار..."
 
+            stream_url = f"https://stream.mux.com/{playback_id}.m3u8" if playback_id != "قيد الانتظار..." else "قيد الانتظار..."
+
             keyboard = [
                 [InlineKeyboardButton("📤 رفع فيديو آخر", callback_data=f"section_upload_{section_id}")],
                 [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
@@ -474,8 +476,7 @@ async def handle_video_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"🎬 <b>النظام:</b> {system_name}\n"
                 f"📁 <b>القسم:</b> {section_id}\n"
                 f"🎥 <b>اسم الفيديو:</b> {video_name}\n"
-                f"🆔 <b>معرف الأصل:</b>\n<code>{asset_id}</code>\n"
-                f"🔑 <b>معرف التشغيل:</b>\n<code>{playback_id}</code>\n\n"
+                f"🔗 <b>رابط التشغيل:</b>\n<code>{stream_url}</code>\n\n"
                 "<i>جاري تتبع حالة الأصل...</i>",
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode=ParseMode.HTML,
@@ -524,13 +525,15 @@ async def track_asset_status(chat_id, bot, asset_id, creds, video_name, playback
                     final_playback_id = playback_id
                     if data.get("playback_ids"):
                         final_playback_id = data["playback_ids"][0]["id"]
+                    stream_url = f"https://stream.mux.com/{final_playback_id}.m3u8" if final_playback_id != "قيد الانتظار..." else "قيد الانتظار..."
+
                     await bot.send_message(
                         chat_id=chat_id,
                         text=(
                             f"✨ <b>الفيديو جاهز!</b>\n\n"
                             f"🎥 <b>الفيديو:</b> {video_name}\n"
                             f"✅ <b>الحالة:</b> جاهز للتشغيل\n"
-                            f"🔑 <b>معرف التشغيل:</b>\n<code>{final_playback_id}</code>"
+                            f"🔗 <b>رابط التشغيل:</b>\n<code>{stream_url}</code>"
                         ),
                         parse_mode=ParseMode.HTML,
                     )
