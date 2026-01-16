@@ -484,7 +484,8 @@ async def handle_video_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"🎬 <b>النظام:</b> {system_name}\n"
                 f"📁 <b>القسم:</b> {section_id}\n"
                 f"🎥 <b>اسم الفيديو:</b> {video_name}\n"
-                f"🔗 <b>رابط التشغيل:</b>\n<code>{stream_url}</code>\n\n"
+                f"🔗 <b>رابط التشغيل:</b>\n<code>{stream_url}</code>\n"
+                f"🆔 <b>Playback ID:</b>\n<code>{playback_id}</code>\n\n"
                 "<i>جاري تتبع حالة الأصل...</i>",
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode=ParseMode.HTML,
@@ -541,7 +542,8 @@ async def track_asset_status(chat_id, bot, asset_id, creds, video_name, playback
                             f"✨ <b>الفيديو جاهز!</b>\n\n"
                             f"🎥 <b>الفيديو:</b> {video_name}\n"
                             f"✅ <b>الحالة:</b> جاهز للتشغيل\n"
-                            f"🔗 <b>رابط التشغيل:</b>\n<code>{stream_url}</code>"
+                            f"🔗 <b>رابط التشغيل:</b>\n<code>{stream_url}</code>\n"
+                            f"🆔 <b>Playback ID:</b>\n<code>{final_playback_id}</code>"
                         ),
                         parse_mode=ParseMode.HTML,
                     )
@@ -550,9 +552,12 @@ async def track_asset_status(chat_id, bot, asset_id, creds, video_name, playback
                     await bot.send_message(
                         chat_id=chat_id,
                         text=(
-                            f"❌ <b>فشلت معالجة الفيديو</b>\n\n"
+                            f"🚨 <b>تنبيه: فشل معالجة الفيديو!</b>\n\n"
                             f"🎥 <b>الفيديو:</b> {video_name}\n"
-                            f"الرجاء التحقق من رابط المصدر والمحاولة مرة أخرى."
+                            f"❌ <b>الحالة:</b> خطأ في المعالجة\n\n"
+                            f"⚠️ <b>الرابط المصدر غير شغال!</b>\n"
+                            f"📌 <b>تأكد من أن الرابط يعمل بشكل صحيح</b>\n\n"
+                            f"<i>يرجى التحقق من الرابط والمحاولة مرة أخرى.</i>"
                         ),
                         parse_mode=ParseMode.HTML,
                     )
