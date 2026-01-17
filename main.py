@@ -61,6 +61,10 @@ CINEMA_PLUS_SECTIONS = {
         "id": "fcbfcdcb-fbd3-41ae-ab10-5451502ac8d3",
         "secret": "NtwphUQyZZsrhOXgadrZN3QoJXxMVW2za+q0xFe/1vLl4PfRjrGCOn18BOqpGFMCFZAc/g2rR0R",
     },
+    "11": {
+        "id": "f2b68f04-4b6a-41a2-8090-6d791a5c7a8c",
+        "secret": "TzOA/ZE8aENXrugWECwFSPjbXiOHrT5DuE0+uyvWkDXplJDaPU17HQUflWK287oxZ3Hu0EFQwNA",
+    },
 }
 
 SHOOF_PLAY_SECTIONS = {
@@ -1129,5 +1133,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
