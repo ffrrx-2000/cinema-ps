@@ -22,8 +22,8 @@ SHOOF_PLAY_PASSWORD = "1460"
 
 CINEMA_PLUS_SECTIONS = {
     "1": {
-        "id": "2ab8ed37-b8af-4ffa-ab78-bc0910fcac6e",
-        "secret": "zkX7I4isPxeMz6tFh20vFt37sNOWPpPgaMpH0u7i2dvavEMea84Wob8UfFvIVouNcfzjpIgt7jl",
+        "id": "dd686bd9-2119-44b5-a8cf-37d1cd95a1a5",
+        "secret": "D4nzOMDyTJUWrztXyAQsjGnWcS5sqgCZTchPB8HLIXkRY3fXK9Y5aXgMFnYhjUQKzpQ8iBNwkMO",
     },
     "2": {
         "id": "3522203d-1925-4ec3-a5f7-9ca9efd1771a",
@@ -1129,3 +1129,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
