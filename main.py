@@ -975,6 +975,17 @@ async def handle_delete_confirmation(update: Update, context: ContextTypes.DEFAU
         system = context.user_data.get("system")
         system_name = get_system_name(system)
 
+        if not creds or not asset_id:
+            keyboard = [[InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")]]
+            await query.edit_message_text(
+                "❌ <b>خطأ في البيانات</b>\n\n"
+                "انتهت صلاحية الجلسة أو فقدت البيانات.\n"
+                "الرجاء إعادة المحاولة من القائمة الرئيسية.",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.HTML,
+            )
+            return MAIN_MENU
+
         await query.edit_message_text(
             f"⏳ <b>جاري حذف الفيديو...</b>\n\n{video_name}",
             parse_mode=ParseMode.HTML,
@@ -1003,7 +1014,15 @@ async def handle_delete_confirmation(update: Update, context: ContextTypes.DEFAU
                 )
                 return MAIN_MENU
             else:
-                error_msg = response.json().get("error", {}).get("message", "خطأ غير معروف")
+                error_msg = "خطأ غير معروف"
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get("error", {}).get("message", error_msg)
+                except (ValueError, KeyError):
+                    # Response is not JSON or malformed
+                    if response.text:
+                        error_msg = response.text[:200]  # Limit error message length
+                
                 keyboard = [[InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")]]
                 await query.edit_message_text(
                     f"❌ <b>فشل الحذف</b>\n\n"
