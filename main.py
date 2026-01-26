@@ -1,4 +1,5 @@
 import os
+import json
 import asyncio
 import time
 from datetime import datetime, timedelta
@@ -20,138 +21,80 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CINEMA_PLUS_PASSWORD = "67146"
 SHOOF_PLAY_PASSWORD = "1460"
 
-CINEMA_PLUS_SECTIONS = {
-    "1": {
-        "id": "2ab8ed37-b8af-4ffa-ab78-bc0910fcac6e",
-        "secret": "zkX7I4isPxeMz6tFh20vFt37sNOWPpPgaMpH0u7i2dvavEMea84Wob8UfFvIVouNcfzjpIgt7jl",
-    },
-    "2": {
-        "id": "3522203d-1925-4ec3-a5f7-9ca9efd1771a",
-        "secret": "p7fHTPl4hFvLh1koWPHlJ7cif9GcOCFxDAYHIAraC4mcGABRrJWp2jNJ4B4cVgIcE2YOY+AT1wb",
-    },
-    "3": {
-        "id": "85501be0-bc4f-415c-afde-b8ac1b996974",
-        "secret": "QXzmzVANcX9VrS2vBCTa0h91+QAlr7iM5izLDrzKUDdhSx2sJx2CuNFT6CJHpqOsftsW2MICpci",
-    },
-    "4": {
-        "id": "7894140e-03a9-4946-9698-1b58f1e3ea38",
-        "secret": "HwgZg1a7h05ul/AYpeICooOp0fOt4o7W9Fxf0am2z4Qb1QyHfIL3BRMjxh1e6b1Dn+WXehKdjaN",
-    },
-    "5": {
-        "id": "147d1438-4269-4739-ae68-7dcbdf9f1d84",
-        "secret": "6cqf9LKM38Q7gbkrrYmWGNwH0v27UjY8DzQWRDZ1Md137UE7+n52NlBGIVc/4qaShADTH5D+LsU",
-    },
-    "6": {
-        "id": "60d38bcd-bb17-4db0-9599-129c232cdabf",
-        "secret": "E9j1AbbGropItPcS4K+Gl1csebAiLMJJuglGn9NxIasbJAmM/CsVXTL9BCyw+jBwsR7Zq51RJy2",
-    },
-    "7": {
-        "id": "31517bbe-2628-438e-b7ac-261708d6f26e",
-        "secret": "pnHQhp05xWhu6tSc8u98c3x47ycmT7zhW3V6mzxlSmqz30vac71VmsHYgRUBI5aDuBFYBIlkcF4",
-    },
-    "8": {
-        "id": "4c53f771-ab87-4dab-9484-2f7f94799f6e",
-        "secret": "rWXTB3ktFkyvcKQkJwD6tcOT+6sV1dM3ndU/H4oZu5qnG6/+2WIw4keq2DPFU+F0foJ57eI0BPz",
-    },
-    "9": {
-        "id": "0f39d0e7-33d9-4983-a20d-c20a54a39d19",
-        "secret": "GG2UNHGjJysTBxe32+VOGEOpLGSEUGINWVvEFyhz+inbm+G41LNi/Hua8Kd9pqeRO+FOLyLgk5/",
-    },
-    "10": {
-        "id": "fcbfcdcb-fbd3-41ae-ab10-5451502ac8d3",
-        "secret": "NtwphUQyZZsrhOXgadrZN3QoJXxMVW2za+q0xFe/1vLl4PfRjrGCOn18BOqpGFMCFZAc/g2rR0R",
-    },
-    "11": {
-        "id": "f2b68f04-4b6a-41a2-8090-6d791a5c7a8c",
-        "secret": "TzOA/ZE8aENXrugWECwFSPjbXiOHrT5DuE0+uyvWkDXplJDaPU17HQUflWK287oxZ3Hu0EFQwNA",
-    },
+# Path to sections JSON file
+SECTIONS_FILE = "sections.json"
+
+# Default sections structure
+DEFAULT_SECTIONS = {
+    "cinema_plus": {},
+    "shoof_play": {}
 }
 
-SHOOF_PLAY_SECTIONS = {
-    "1": {
-        "id": "b6a28905-15dd-4c4e-8455-116d1934820f",
-        "secret": "Z8P9cIYFf49ElRMqGECViG/O5N/qRz8U5ux2r7uhIX2Yp950dgI0DTvWCvUoaeL6rXIaZQ6q+VY",
-    },
-    "2": {
-        "id": "a058bf43-4c80-49d6-b902-b0fd00cfff18",
-        "secret": "+q5bNYmCQyhii+HdXN8RB4jadh704TVtZVp2qqtlwAmNhX5mhibj/0Yg/UALbysMjVfUxO6qTBA",
-    },
-    "3": {
-        "id": "664f5ab9-4b93-4a85-9cdc-39bed76857dd",
-        "secret": "RZG8KZLJkd/+30Idcq26otBmje36qrQTWx3QWdqUErAjhonVPsCIYVZnFq5gLo/nGzAk5GWz5gl",
-    },
-    "4": {
-        "id": "6984f132-ca88-4c86-aac4-d10e44594548",
-        "secret": "C9rWwb3cVH2WUXD7no5co4g/bSIFPox12pmB2xggsCQuBa1/RVDq/5aigHW9Drr5aLTi60SLK5Y",
-    },
-    "5": {
-        "id": "3888e6fc-1e13-4f91-8e03-5d73aab3375c",
-        "secret": "DcedrXuHMmxvbiJby+A8nt0U5LhFOPDvNpFAMuREwRZ/boh1yfG09Gw35e46krTWXvyCZ0ToRQ0",
-    },
-    "6": {
-        "id": "06b5abfd-de0f-4acb-87a0-7716d8951115",
-        "secret": "QZCYyNNCHcAuTk3Y+XvpP/uWIThW57mVWMyBagiNiFeMVBVZaB0e1deXazxLfBef/H77XVkIWkG",
-    },
-    "7": {
-        "id": "2d3edb5b-dc6e-4af3-917f-726434532b3c",
-        "secret": "SP5m9+Vc4eGwITG/nUbYNfbdnkYcR6hDIkZz6FZ8ni9ocsTeva6dKbmP/SfoOcwaEaZ4dMkO95d",
-    },
-    "8": {
-        "id": "4a32292d-e7ee-492d-b43c-57ce8b8a2095",
-        "secret": "3tklq+6lYCEUedNEyliywgieRM3jDW6XTWiB+CDI1Zs0TEUC4GweXsAIq08LQbK9ebReIaiOTK4",
-    },
-    "9": {
-        "id": "0d8b2a67-2c1c-474e-a1a3-cbdfb3e56cb1",
-        "secret": "K6jv2a+cNTVndUuM94VvLnu54be2wBFg9a8q0TdqoRv98qu+UHJ9+vIc0u1Ax59eBtoVgyWlA4G",
-    },
-    "10": {
-        "id": "d732c626-11ec-43bd-90f0-50b9c96489ef",
-        "secret": "tGVwrWhcwU9DzhBrgnyvWbVkt1i7nmw8e6B5D0PozwhJ14NHmg+u4nMQrknZOu0NssnNmANGDW9",
-    },
-    "11": {
-        "id": "1bb7a1e8-ba83-419e-9796-d8f95fd6767f",
-        "secret": "dD+2uEj5mR2g/6N5RmsDZhLQ0hk7EVhvTBgS43UQqYNtpBUQxdz9dxMDeoVpXT3VLStO/x3HHql",
-    },
-    "12": {
-        "id": "44acb746-ade9-4b1a-9202-99f319e22647",
-        "secret": "oLeB+xQt1EFGMVkwonV1O2iRKxGbBUdHuo1oF+vEUbU4r3NoucOgcaUXH5vgefM02DNF2aCI90P",
-    },
-    "13": {
-        "id": "cfefbf91-c4b8-4b49-9c85-5f4e3fb2fbd3",
-        "secret": "H6pC+M1B96SQBrOBe6twQ1+glm3Stu8eroGMcs7Y5dtNy9Dkj7YacQBzXdONGM+p9l1R8r8LzPA",
-    },
-    "14": {
-        "id": "cc28a604-d2df-4d8f-a7a9-55a6e5722bf6",
-        "secret": "VeYbzua6o/e0IpCclkImkrOriueb2RbqvpXo///A/V4T89kLFFr8PE2/ZqZiJPlg74IU6c8IGZs",
-    },
-    "15": {
-        "id": "e85fa620-de3d-4366-962f-d57faa83838e",
-        "secret": "dj5ujB9t4a7sQNzT7k4otAotEVBK01RasBhaI3c6M6nveOdmCUtr9kSjuVzROOezPy9iAj+ksxY",
-    },
-    "16": {
-        "id": "16c71792-9fa2-4381-9793-12256695a0bd",
-        "secret": "F496wajL4fRk7QWj9tnBCbTwuGC4Ybjn8Me6L+fZJxtFenI/WtcD8yeFnPCKZiiGxQBCCTZcQIy",
-    },
-    "17": {
-        "id": "3bd99e7d-5805-45e7-90ba-cf7395bea2ec",
-        "secret": "2cTSi3G5LkqJ9/TLMXezMZ6Q+AZNBCpgKRTe/PLH3lyFtijhpGJJ34sEenktHll7anjDCszqopT",
-    },
-    "18": {
-        "id": "2f230bba-92a3-425a-a235-ba792a6cda4e",
-        "secret": "LyoGF6sbby1ajGKvCQKak11/7T9jPNKWt8sF4uTCMppjisoq8lIAHwQalyaNcnaAepcLNgwPoQ1",
-    },
-    "19": {
-        "id": "ba238656-8a32-40ea-b8ea-edaabd17ea4e",
-        "secret": "hjJh8oSOZ0nznssaR9iioEAQ3gHiq9aQEUUbw8+PrqSRkr9VE69fhC6wlqa0gYU1asz7JNo/c32",
-    },
-    "20": {
-        "id": "5414c527-5e37-4229-b761-0a7f4343b6d8",
-        "secret": "zOWmBPj7pM3vj4lTy9NzFj//qFhbRaJFqqarfDsSJ55hTo+mP0XeR07mAS8uC3OcDbGzdcRFE3S",
-    },
-}
+def load_sections() -> dict:
+    """Load sections from JSON file. Creates file with defaults if it doesn't exist."""
+    if os.path.exists(SECTIONS_FILE):
+        try:
+            with open(SECTIONS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                # Ensure both systems exist
+                if "cinema_plus" not in data:
+                    data["cinema_plus"] = {}
+                if "shoof_play" not in data:
+                    data["shoof_play"] = {}
+                return data
+        except (json.JSONDecodeError, IOError):
+            return DEFAULT_SECTIONS.copy()
+    else:
+        # Create default file
+        save_sections(DEFAULT_SECTIONS)
+        return DEFAULT_SECTIONS.copy()
+
+
+def save_sections(sections: dict) -> bool:
+    """Save sections to JSON file."""
+    try:
+        with open(SECTIONS_FILE, "w", encoding="utf-8") as f:
+            json.dump(sections, f, indent=2, ensure_ascii=False)
+        return True
+    except IOError:
+        return False
+
+
+def get_next_section_number(system: str) -> str:
+    """Get the next available section number for a system."""
+    sections = load_sections()
+    system_sections = sections.get(system, {})
+    if not system_sections:
+        return "1"
+    # Get all numeric keys and find the max
+    numeric_keys = [int(k) for k in system_sections.keys() if k.isdigit()]
+    if not numeric_keys:
+        return "1"
+    return str(max(numeric_keys) + 1)
+
+
+def add_section(system: str, mux_id: str, mux_secret: str) -> str:
+    """Add a new section to a system. Returns the new section number."""
+    sections = load_sections()
+    new_number = get_next_section_number(system)
+    sections[system][new_number] = {
+        "id": mux_id,
+        "secret": mux_secret
+    }
+    save_sections(sections)
+    return new_number
+
+
+# In-memory cache for sections (reloaded on each access for real-time updates)
+def get_sections_for_system(system: str) -> dict:
+    """Get sections for a specific system from JSON file."""
+    sections = load_sections()
+    return sections.get(system, {})
+
 
 user_auth_cache = {}
 
+# Conversation states
 (
     SELECT_SYSTEM,
     AUTH_PASSWORD,
@@ -166,7 +109,9 @@ user_auth_cache = {}
     SELECT_SECTION_DELETE,
     SELECT_VIDEO_DELETE,
     CONFIRM_DELETE,
-) = range(13)
+    ADD_SECTION_MUX_ID,
+    ADD_SECTION_MUX_SECRET,
+) = range(15)
 
 
 def is_user_authenticated(user_id: int, system: str) -> bool:
@@ -183,14 +128,6 @@ def is_user_authenticated(user_id: int, system: str) -> bool:
 def authenticate_user(user_id: int, system: str):
     key = f"{user_id}_{system}"
     user_auth_cache[key] = datetime.now()
-
-
-def get_sections_for_system(system: str) -> dict:
-    if system == "cinema_plus":
-        return CINEMA_PLUS_SECTIONS
-    elif system == "shoof_play":
-        return SHOOF_PLAY_SECTIONS
-    return {}
 
 
 def get_password_for_system(system: str) -> str:
@@ -285,6 +222,7 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edi
         [InlineKeyboardButton("🗑️ حذف فيديو", callback_data="menu_delete")],
         [InlineKeyboardButton("🎞️ عرض معرفات التشغيل", callback_data="menu_playback")],
         [InlineKeyboardButton("📊 فحص السعة المباشر", callback_data="menu_capacity")],
+        [InlineKeyboardButton("➕ إضافة قسم", callback_data="menu_add_section")],
         [InlineKeyboardButton("🔙 تبديل النظام", callback_data="menu_switch")],
     ]
 
@@ -322,6 +260,8 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await show_section_selector(update, context, "playback")
     elif action == "menu_capacity":
         return await show_section_selector(update, context, "capacity")
+    elif action == "menu_add_section":
+        return await start_add_section(update, context)
     elif action == "menu_switch":
         keyboard = [
             [InlineKeyboardButton("🎬 سينما بلس", callback_data="system_cinema_plus")],
@@ -337,6 +277,89 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await show_main_menu(update, context, edit=True)
 
 
+async def start_add_section(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start the process of adding a new section to the CURRENT system."""
+    query = update.callback_query
+    system = context.user_data.get("system")
+    system_name = get_system_name(system)
+    
+    # Get the next section number for this system
+    next_number = get_next_section_number(system)
+    context.user_data["adding_section_number"] = next_number
+    
+    keyboard = [[InlineKeyboardButton("❌ إلغاء", callback_data="menu_back")]]
+    
+    await query.edit_message_text(
+        f"➕ <b>إضافة قسم جديد - {system_name}</b>\n\n"
+        f"📁 رقم القسم الجديد: <b>{next_number}</b>\n\n"
+        f"<b>الخطوة 1 من 2:</b>\n"
+        f"الرجاء إرسال <b>Mux ID</b>:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML,
+    )
+    return ADD_SECTION_MUX_ID
+
+
+async def handle_add_section_mux_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle receiving the Mux ID for the new section."""
+    mux_id = update.message.text.strip()
+    context.user_data["new_section_mux_id"] = mux_id
+    
+    system = context.user_data.get("system")
+    system_name = get_system_name(system)
+    next_number = context.user_data.get("adding_section_number")
+    
+    keyboard = [[InlineKeyboardButton("❌ إلغاء", callback_data="menu_back")]]
+    
+    await update.message.reply_text(
+        f"➕ <b>إضافة قسم جديد - {system_name}</b>\n\n"
+        f"📁 رقم القسم الجديد: <b>{next_number}</b>\n"
+        f"🔑 Mux ID: <code>{mux_id}</code>\n\n"
+        f"<b>الخطوة 2 من 2:</b>\n"
+        f"الرجاء إرسال <b>Mux Secret</b>:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML,
+    )
+    return ADD_SECTION_MUX_SECRET
+
+
+async def handle_add_section_mux_secret(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle receiving the Mux Secret and save the new section."""
+    mux_secret = update.message.text.strip()
+    mux_id = context.user_data.get("new_section_mux_id")
+    system = context.user_data.get("system")
+    system_name = get_system_name(system)
+    
+    # Try to delete the secret message for security
+    try:
+        await update.message.delete()
+    except:
+        pass
+    
+    # Add the section to the JSON file
+    new_section_number = add_section(system, mux_id, mux_secret)
+    
+    # Clear temporary data
+    context.user_data.pop("new_section_mux_id", None)
+    context.user_data.pop("adding_section_number", None)
+    
+    keyboard = [
+        [InlineKeyboardButton("➕ إضافة قسم آخر", callback_data="menu_add_section")],
+        [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
+    ]
+    
+    await update.message.reply_text(
+        f"✅ <b>تم إضافة القسم بنجاح!</b>\n\n"
+        f"🎬 <b>النظام:</b> {system_name}\n"
+        f"📁 <b>رقم القسم:</b> {new_section_number}\n"
+        f"🔑 <b>Mux ID:</b> <code>{mux_id}</code>\n\n"
+        f"<i>القسم متاح الآن للاستخدام مباشرة!</i>",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML,
+    )
+    return MAIN_MENU
+
+
 async def show_section_selector(update: Update, context: ContextTypes.DEFAULT_TYPE, action_type: str):
     query = update.callback_query
     system = context.user_data.get("system")
@@ -345,9 +368,24 @@ async def show_section_selector(update: Update, context: ContextTypes.DEFAULT_TY
 
     context.user_data["action_type"] = action_type
 
+    if not sections:
+        keyboard = [
+            [InlineKeyboardButton("➕ إضافة قسم", callback_data="menu_add_section")],
+            [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
+        ]
+        await query.edit_message_text(
+            f"⚠️ <b>لا توجد أقسام في {system_name}</b>\n\n"
+            "الرجاء إضافة قسم أولاً باستخدام زر 'إضافة قسم'.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.HTML,
+        )
+        return MAIN_MENU
+
     keyboard = []
     row = []
-    for i, section_id in enumerate(sections.keys(), 1):
+    # Sort sections by numeric value
+    sorted_sections = sorted(sections.keys(), key=lambda x: int(x) if x.isdigit() else 0)
+    for i, section_id in enumerate(sorted_sections, 1):
         callback_data = f"section_{action_type}_{section_id}"
         row.append(InlineKeyboardButton(f"قسم {section_id}", callback_data=callback_data))
         if i % 5 == 0:
@@ -761,7 +799,9 @@ async def handle_capacity_section(update: Update, context: ContextTypes.DEFAULT_
         total_used = 0
         total_capacity = len(sections) * 10
 
-        for section_id, creds in sections.items():
+        sorted_sections = sorted(sections.keys(), key=lambda x: int(x) if x.isdigit() else 0)
+        for section_id in sorted_sections:
+            creds = sections[section_id]
             try:
                 res = requests.get(
                     "https://api.mux.com/video/v1/assets",
@@ -1023,9 +1063,8 @@ async def handle_delete_confirmation(update: Update, context: ContextTypes.DEFAU
                     error_data = response.json()
                     error_msg = error_data.get("error", {}).get("message", error_msg)
                 except (ValueError, KeyError):
-                    # Response is not JSON or malformed
                     if response.text:
-                        error_msg = response.text[:200]  # Limit error message length
+                        error_msg = response.text[:200]
                 
                 keyboard = [[InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")]]
                 await query.edit_message_text(
@@ -1060,9 +1099,12 @@ def main():
         print("خطأ: متغير البيئة BOT_TOKEN غير مُعيّن!")
         return
 
+    # Load sections from JSON file
+    sections = load_sections()
+    
     print("جاري تشغيل بوت إدارة الفيديوهات...")
-    print(f"سينما بلس: تم تحميل {len(CINEMA_PLUS_SECTIONS)} أقسام")
-    print(f"شوف بلاي: تم تحميل {len(SHOOF_PLAY_SECTIONS)} أقسام")
+    print(f"سينما بلس: تم تحميل {len(sections.get('cinema_plus', {}))} أقسام")
+    print(f"شوف بلاي: تم تحميل {len(sections.get('shoof_play', {}))} أقسام")
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
@@ -1119,6 +1161,14 @@ def main():
             CONFIRM_DELETE: [
                 CallbackQueryHandler(handle_delete_confirmation, pattern="^confirm_delete_"),
             ],
+            ADD_SECTION_MUX_ID: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_add_section_mux_id),
+                CallbackQueryHandler(main_menu_handler, pattern="^menu_back$"),
+            ],
+            ADD_SECTION_MUX_SECRET: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_add_section_mux_secret),
+                CallbackQueryHandler(main_menu_handler, pattern="^menu_back$"),
+            ],
         },
         fallbacks=[
             CommandHandler("start", start),
@@ -1133,6 +1183,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
