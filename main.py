@@ -1,6 +1,7 @@
 import os
 import json
 import asyncio
+import base64
 import time
 from datetime import datetime, timedelta
 import requests
@@ -17,11 +18,15 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+GITHUB_REPO = os.getenv("GITHUB_REPO", "ffrrx-2000/cinema-ps")  # format: "username/repo"
+GITHUB_FILE_PATH = "sections.json"
+GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main")
 
 CINEMA_PLUS_PASSWORD = "67146"
 SHOOF_PLAY_PASSWORD = "1460"
 
-# Path to sections JSON file
+# Path to sections JSON file (local cache)
 SECTIONS_FILE = "sections.json"
 
 # Default sections structure
@@ -30,13 +35,118 @@ DEFAULT_SECTIONS = {
     "shoof_play": {}
 }
 
-def load_sections() -> dict:
-    """Load sections from JSON file. Creates file with defaults if it doesn't exist."""
+# In-memory cache for sections
+_sections_cache = None
+_github_file_sha = None
+
+def load_sections_from_github() -> tuple[dict, str | None]:
+    """Load sections from GitHub repository."""
+    global _sections_cache, _github_file_sha
+    
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        print("Warning: GitHub credentials not set, using local file")
+        return load_sections_local(), None
+    
+    try:
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
+        headers = {
+            "Authorization": f"token {GITHUB_TOKEN}",
+            "Accept": "application/vnd.github.v3+json"
+        }
+        params = {"ref": GITHUB_BRANCH}
+        
+        response = requests.get(url, headers=headers, params=params, timeout=15)
+        
+        if response.status_code == 200:
+            data = response.json()
+            content = base64.b64decode(data["content"]).decode("utf-8")
+            sha = data["sha"]
+            sections = json.loads(content)
+            
+            # Ensure both systems exist
+            if "cinema_plus" not in sections:
+                sections["cinema_plus"] = {}
+            if "shoof_play" not in sections:
+                sections["shoof_play"] = {}
+            
+            _sections_cache = sections
+            _github_file_sha = sha
+            return sections, sha
+        elif response.status_code == 404:
+            # File doesn't exist, create it
+            print("sections.json not found on GitHub, creating...")
+            save_sections_to_github(DEFAULT_SECTIONS)
+            return DEFAULT_SECTIONS.copy(), None
+        else:
+            print(f"GitHub API error: {response.status_code} - {response.text}")
+            return load_sections_local(), None
+            
+    except Exception as e:
+        print(f"Error loading from GitHub: {e}")
+        return load_sections_local(), None
+
+
+def save_sections_to_github(sections: dict) -> bool:
+    """Save sections to GitHub repository."""
+    global _github_file_sha
+    
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        print("Warning: GitHub credentials not set, saving locally only")
+        return save_sections_local(sections)
+    
+    try:
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
+        headers = {
+            "Authorization": f"token {GITHUB_TOKEN}",
+            "Accept": "application/vnd.github.v3+json"
+        }
+        
+        # Encode content to base64
+        content = json.dumps(sections, indent=2, ensure_ascii=False)
+        content_b64 = base64.b64encode(content.encode("utf-8")).decode("utf-8")
+        
+        # Prepare the request body
+        body = {
+            "message": f"Update sections.json - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            "content": content_b64,
+            "branch": GITHUB_BRANCH
+        }
+        
+        # If we have SHA, include it (required for updating existing file)
+        if _github_file_sha:
+            body["sha"] = _github_file_sha
+        else:
+            # Get current SHA if we don't have it
+            response = requests.get(url, headers=headers, params={"ref": GITHUB_BRANCH}, timeout=10)
+            if response.status_code == 200:
+                body["sha"] = response.json()["sha"]
+        
+        # Make the PUT request
+        response = requests.put(url, headers=headers, json=body, timeout=30)
+        
+        if response.status_code in [200, 201]:
+            # Update the SHA for future updates
+            _github_file_sha = response.json()["content"]["sha"]
+            print("Successfully saved to GitHub")
+            
+            # Also save locally as backup
+            save_sections_local(sections)
+            return True
+        else:
+            print(f"GitHub save error: {response.status_code} - {response.text}")
+            return save_sections_local(sections)
+            
+    except Exception as e:
+        print(f"Error saving to GitHub: {e}")
+        return save_sections_local(sections)
+
+
+def load_sections_local() -> dict:
+    """Load sections from local JSON file (fallback)."""
     if os.path.exists(SECTIONS_FILE):
         try:
             with open(SECTIONS_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                # Ensure both systems exist
                 if "cinema_plus" not in data:
                     data["cinema_plus"] = {}
                 if "shoof_play" not in data:
@@ -44,20 +154,32 @@ def load_sections() -> dict:
                 return data
         except (json.JSONDecodeError, IOError):
             return DEFAULT_SECTIONS.copy()
-    else:
-        # Create default file
-        save_sections(DEFAULT_SECTIONS)
-        return DEFAULT_SECTIONS.copy()
+    return DEFAULT_SECTIONS.copy()
 
 
-def save_sections(sections: dict) -> bool:
-    """Save sections to JSON file."""
+def save_sections_local(sections: dict) -> bool:
+    """Save sections to local JSON file (fallback/backup)."""
     try:
         with open(SECTIONS_FILE, "w", encoding="utf-8") as f:
             json.dump(sections, f, indent=2, ensure_ascii=False)
         return True
     except IOError:
         return False
+
+
+def load_sections() -> dict:
+    """Load sections - tries GitHub first, falls back to local."""
+    global _sections_cache
+    sections, _ = load_sections_from_github()
+    _sections_cache = sections
+    return sections
+
+
+def save_sections(sections: dict) -> bool:
+    """Save sections - saves to GitHub and local."""
+    global _sections_cache
+    _sections_cache = sections
+    return save_sections_to_github(sections)
 
 
 def get_next_section_number(system: str) -> str:
@@ -1096,15 +1218,21 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     if not BOT_TOKEN:
-        print("خطأ: متغير البيئة BOT_TOKEN غير مُعيّن!")
+        print("Error: BOT_TOKEN environment variable is not set!")
         return
+    
+    if not GITHUB_TOKEN:
+        print("Warning: GITHUB_TOKEN not set - sections will only be saved locally!")
+    else:
+        print(f"GitHub integration enabled for repo: {GITHUB_REPO}")
 
-    # Load sections from JSON file
+    # Load sections from GitHub (or local file as fallback)
+    print("Loading sections from GitHub...")
     sections = load_sections()
     
-    print("جاري تشغيل بوت إدارة الفيديوهات...")
-    print(f"سينما بلس: تم تحميل {len(sections.get('cinema_plus', {}))} أقسام")
-    print(f"شوف بلاي: تم تحميل {len(sections.get('shoof_play', {}))} أقسام")
+    print("Bot starting...")
+    print(f"Cinema Plus: {len(sections.get('cinema_plus', {}))} sections loaded")
+    print(f"Shoof Play: {len(sections.get('shoof_play', {}))} sections loaded")
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
