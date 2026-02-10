@@ -3,6 +3,7 @@ import json
 import asyncio
 import base64
 import time
+import math
 from datetime import datetime, timedelta
 import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -22,6 +23,8 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_REPO = os.getenv("GITHUB_REPO", "ffrrx-2000/cinema-ps")  # format: "username/repo"
 GITHUB_FILE_PATH = "sections.json"
 GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main")
+TMDB_API_KEY = "06f120992cfacd7c118f6e7086d23544"
+TMDB_BASE_URL = "https://api.themoviedb.org/3"
 
 CINEMA_PLUS_PASSWORD = "67146"
 SHOOF_PLAY_PASSWORD = "1460"
@@ -214,6 +217,74 @@ def get_sections_for_system(system: str) -> dict:
     return sections.get(system, {})
 
 
+# ─── TMDB Helper Functions ───────────────────────────────────────────────────
+
+def tmdb_get_series(tmdb_id: int) -> dict | None:
+    """Fetch TV series details from TMDB."""
+    try:
+        url = f"{TMDB_BASE_URL}/tv/{tmdb_id}"
+        params = {"api_key": TMDB_API_KEY, "language": "ar-SA"}
+        res = requests.get(url, params=params, timeout=10)
+        if res.status_code == 200:
+            return res.json()
+        # Fallback to English if Arabic not available
+        params["language"] = "en-US"
+        res = requests.get(url, params=params, timeout=10)
+        if res.status_code == 200:
+            return res.json()
+        return None
+    except Exception:
+        return None
+
+
+def tmdb_get_season(tmdb_id: int, season_number: int) -> dict | None:
+    """Fetch season details from TMDB."""
+    try:
+        url = f"{TMDB_BASE_URL}/tv/{tmdb_id}/season/{season_number}"
+        params = {"api_key": TMDB_API_KEY, "language": "ar-SA"}
+        res = requests.get(url, params=params, timeout=10)
+        if res.status_code == 200:
+            return res.json()
+        params["language"] = "en-US"
+        res = requests.get(url, params=params, timeout=10)
+        if res.status_code == 200:
+            return res.json()
+        return None
+    except Exception:
+        return None
+
+
+def calculate_sections_needed(total_episodes: int) -> int:
+    """Calculate how many Mux sections are needed for episodes (max 10 per section)."""
+    return math.ceil(total_episodes / 10)
+
+
+def get_available_sections_with_space(system: str) -> list[dict]:
+    """Get sections that have available space, with their current count."""
+    sections = get_sections_for_system(system)
+    available = []
+    sorted_keys = sorted(sections.keys(), key=lambda x: int(x) if x.isdigit() else 0)
+    for section_id in sorted_keys:
+        creds = sections[section_id]
+        try:
+            res = requests.get(
+                "https://api.mux.com/video/v1/assets",
+                auth=(creds["id"], creds["secret"]),
+                timeout=10,
+            )
+            count = len(res.json().get("data", []))
+            if count < 10:
+                available.append({
+                    "section_id": section_id,
+                    "creds": creds,
+                    "used": count,
+                    "free": 10 - count,
+                })
+        except Exception:
+            pass
+    return available
+
+
 user_auth_cache = {}
 
 # Conversation states
@@ -233,7 +304,14 @@ user_auth_cache = {}
     CONFIRM_DELETE,
     ADD_SECTION_MUX_ID,
     ADD_SECTION_MUX_SECRET,
-) = range(15)
+    # Series states
+    SERIES_ENTER_TMDB_ID,
+    SERIES_SELECT_SEASON,
+    SERIES_CONFIRM_PLAN,
+    SERIES_ENTER_EPISODE_LINK,
+    SERIES_SEASON_DONE,
+    SERIES_SHOW_PLAYBACK_IDS,
+) = range(21)
 
 
 def is_user_authenticated(user_id: int, system: str) -> bool:
@@ -340,6 +418,7 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edi
 
     keyboard = [
         [InlineKeyboardButton("📤 رفع فيديو", callback_data="menu_upload")],
+        [InlineKeyboardButton("📺 إضافة مسلسل كامل", callback_data="menu_series")],
         [InlineKeyboardButton("🔍 مراجعة القسم", callback_data="menu_review")],
         [InlineKeyboardButton("🗑️ حذف فيديو", callback_data="menu_delete")],
         [InlineKeyboardButton("🎞️ عرض معرفات التشغيل", callback_data="menu_playback")],
@@ -374,6 +453,8 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if action == "menu_upload":
         return await show_section_selector(update, context, "upload")
+    elif action == "menu_series":
+        return await series_start(update, context)
     elif action == "menu_review":
         return await show_section_selector(update, context, "review")
     elif action == "menu_delete":
@@ -1208,6 +1289,753 @@ async def handle_delete_confirmation(update: Update, context: ContextTypes.DEFAU
             return MAIN_MENU
 
 
+# ─── Series (TV Show) Handlers ───────────────────────────────────────────────
+
+async def series_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start the series addition flow - ask for TMDB ID."""
+    query = update.callback_query
+    system = context.user_data.get("system")
+    system_name = get_system_name(system)
+
+    keyboard = [[InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")]]
+
+    await query.edit_message_text(
+        f"📺 <b>إضافة مسلسل كامل - {system_name}</b>\n\n"
+        "الرجاء إرسال <b>TMDB ID</b> الخاص بالمسلسل.\n\n"
+        "<i>يمكنك العثور على الـ ID من موقع themoviedb.org\n"
+        "مثال: 1396 (Breaking Bad)</i>",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML,
+    )
+    return SERIES_ENTER_TMDB_ID
+
+
+async def series_handle_tmdb_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle the TMDB ID input and show series info with seasons."""
+    tmdb_id_text = update.message.text.strip()
+
+    if not tmdb_id_text.isdigit():
+        await update.message.reply_text(
+            "❌ <b>الرجاء إرسال رقم صحيح فقط (TMDB ID)</b>",
+            parse_mode=ParseMode.HTML,
+        )
+        return SERIES_ENTER_TMDB_ID
+
+    tmdb_id = int(tmdb_id_text)
+    series_data = tmdb_get_series(tmdb_id)
+
+    if not series_data:
+        keyboard = [[InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")]]
+        await update.message.reply_text(
+            "❌ <b>لم يتم العثور على المسلسل</b>\n\n"
+            "تأكد من صحة الـ TMDB ID وحاول مرة أخرى.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.HTML,
+        )
+        return SERIES_ENTER_TMDB_ID
+
+    # Store series data
+    series_name = series_data.get("name", "غير معروف")
+    seasons = series_data.get("seasons", [])
+    # Filter out season 0 (specials)
+    regular_seasons = [s for s in seasons if s.get("season_number", 0) > 0]
+    total_seasons = len(regular_seasons)
+    poster_path = series_data.get("poster_path", "")
+    overview = series_data.get("overview", "لا يوجد وصف")
+
+    context.user_data["series_tmdb_id"] = tmdb_id
+    context.user_data["series_name"] = series_name
+    context.user_data["series_seasons"] = regular_seasons
+    context.user_data["series_all_playback_ids"] = {}  # {season_num: {ep_num: playback_id}}
+
+    # Build season buttons
+    keyboard = []
+    row = []
+    for i, season in enumerate(regular_seasons, 1):
+        s_num = season.get("season_number", i)
+        ep_count = season.get("episode_count", 0)
+        btn_text = f"الموسم {s_num} ({ep_count} حلقة)"
+        row.append(InlineKeyboardButton(btn_text, callback_data=f"series_season_{s_num}"))
+        if i % 2 == 0:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+    keyboard.append([InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")])
+
+    poster_url = f"https://image.tmdb.org/t/p/w300{poster_path}" if poster_path else ""
+
+    text = (
+        f"📺 <b>{series_name}</b>\n\n"
+        f"🆔 TMDB ID: <code>{tmdb_id}</code>\n"
+        f"📅 عدد المواسم: <b>{total_seasons}</b>\n\n"
+    )
+
+    # Add season details
+    for season in regular_seasons:
+        s_num = season.get("season_number", 0)
+        ep_count = season.get("episode_count", 0)
+        text += f"  الموسم {s_num}: {ep_count} حلقة\n"
+
+    text += "\n<b>اختر الموسم الذي تريد إضافته:</b>"
+
+    if poster_url:
+        try:
+            await update.message.reply_photo(
+                photo=poster_url,
+                caption=text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.HTML,
+            )
+            return SERIES_SELECT_SEASON
+        except Exception:
+            pass
+
+    await update.message.reply_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML,
+    )
+    return SERIES_SELECT_SEASON
+
+
+async def series_select_season(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle season selection - check sections and show plan."""
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "menu_back":
+        return await show_main_menu(update, context, edit=True)
+
+    season_num = int(query.data.replace("series_season_", ""))
+    tmdb_id = context.user_data.get("series_tmdb_id")
+    series_name = context.user_data.get("series_name")
+    system = context.user_data.get("system")
+    system_name = get_system_name(system)
+
+    # Fetch season details from TMDB
+    season_data = tmdb_get_season(tmdb_id, season_num)
+    if not season_data:
+        keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data="series_back_to_seasons")]]
+        await query.edit_message_text(
+            "❌ <b>فشل في جلب بيانات الموسم</b>\n\nحاول مرة أخرى.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.HTML,
+        )
+        return SERIES_SELECT_SEASON
+
+    episodes = season_data.get("episodes", [])
+    total_episodes = len(episodes)
+
+    context.user_data["series_current_season"] = season_num
+    context.user_data["series_episodes"] = episodes
+    context.user_data["series_total_episodes"] = total_episodes
+
+    # Calculate sections needed
+    sections_needed = calculate_sections_needed(total_episodes)
+
+    # Check available sections
+    await query.edit_message_text(
+        "⏳ <b>جاري فحص الأقسام المتاحة...</b>",
+        parse_mode=ParseMode.HTML,
+    )
+
+    available = get_available_sections_with_space(system)
+    total_free_slots = sum(s["free"] for s in available)
+
+    # Build the upload plan: assign episodes to sections
+    upload_plan = []  # list of {"section_id", "creds", "episodes": [ep_numbers]}
+    remaining_eps = list(range(1, total_episodes + 1))
+
+    for sec in available:
+        if not remaining_eps:
+            break
+        take = min(sec["free"], len(remaining_eps))
+        eps_for_section = remaining_eps[:take]
+        remaining_eps = remaining_eps[take:]
+        upload_plan.append({
+            "section_id": sec["section_id"],
+            "creds": sec["creds"],
+            "episodes": eps_for_section,
+        })
+
+    context.user_data["series_upload_plan"] = upload_plan
+    context.user_data["series_remaining_eps"] = remaining_eps
+
+    # Show the plan
+    text = (
+        f"📺 <b>{series_name} - الموسم {season_num}</b>\n"
+        f"🎬 <b>النظام:</b> {system_name}\n\n"
+        f"📊 <b>عدد الحلقات:</b> {total_episodes}\n"
+        f"📁 <b>الأقسام المطلوبة:</b> {sections_needed}\n"
+        f"✅ <b>الأماكن المتاحة:</b> {total_free_slots}\n\n"
+    )
+
+    if remaining_eps:
+        # Not enough space
+        missing_slots = len(remaining_eps)
+        extra_sections = calculate_sections_needed(missing_slots)
+        text += (
+            f"⚠️ <b>تحتاج إلى {extra_sections} قسم/أقسام إضافية!</b>\n"
+            f"📌 ينقصك <b>{missing_slots}</b> مكان لاستيعاب جميع الحلقات.\n\n"
+            "<b>الرجاء إضافة أقسام جديدة أولاً ثم العودة.</b>"
+        )
+        keyboard = [
+            [InlineKeyboardButton("➕ إضافة قسم جديد", callback_data="menu_add_section")],
+            [InlineKeyboardButton("🔙 رجوع للمواسم", callback_data="series_back_to_seasons")],
+            [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
+        ]
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.HTML,
+        )
+        return SERIES_SELECT_SEASON
+    else:
+        # Enough space - show the plan
+        text += "<b>خطة التوزيع:</b>\n"
+        for plan in upload_plan:
+            ep_range = plan["episodes"]
+            if ep_range:
+                text += f"  القسم {plan['section_id']}: الحلقات {ep_range[0]} - {ep_range[-1]} ({len(ep_range)} حلقة)\n"
+
+        text += "\n<b>هل تريد البدء بالرفع؟</b>"
+
+        keyboard = [
+            [InlineKeyboardButton("✅ ابدأ الرفع", callback_data="series_confirm_start")],
+            [InlineKeyboardButton("🔙 رجوع للمواسم", callback_data="series_back_to_seasons")],
+            [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
+        ]
+
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.HTML,
+        )
+        return SERIES_CONFIRM_PLAN
+
+
+async def series_confirm_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle plan confirmation - start asking for episode links."""
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "menu_back":
+        return await show_main_menu(update, context, edit=True)
+
+    if query.data == "series_back_to_seasons":
+        return await series_back_to_seasons(update, context)
+
+    if query.data == "series_confirm_start":
+        # Initialize episode tracking
+        context.user_data["series_current_ep_index"] = 0
+        context.user_data["series_current_plan_index"] = 0
+        context.user_data["series_uploaded_playback_ids"] = []  # list of (ep_num, playback_id)
+
+        return await series_ask_next_episode(update, context, edit=True)
+
+
+async def series_ask_next_episode(update: Update, context: ContextTypes.DEFAULT_TYPE, edit: bool = True):
+    """Ask the user for the next episode link."""
+    upload_plan = context.user_data.get("series_upload_plan", [])
+    plan_index = context.user_data.get("series_current_plan_index", 0)
+    ep_index = context.user_data.get("series_current_ep_index", 0)
+    series_name = context.user_data.get("series_name")
+    season_num = context.user_data.get("series_current_season")
+    total_episodes = context.user_data.get("series_total_episodes", 0)
+    episodes = context.user_data.get("series_episodes", [])
+
+    # Calculate overall episode number
+    overall_ep = ep_index + 1
+
+    if overall_ep > total_episodes:
+        # All episodes done
+        return await series_season_complete(update, context, edit=edit)
+
+    # Find current section from plan
+    current_plan = None
+    ep_count_so_far = 0
+    for i, plan in enumerate(upload_plan):
+        if ep_count_so_far + len(plan["episodes"]) >= overall_ep:
+            current_plan = plan
+            context.user_data["series_current_plan_index"] = i
+            break
+        ep_count_so_far += len(plan["episodes"])
+
+    if not current_plan:
+        return await series_season_complete(update, context, edit=edit)
+
+    section_id = current_plan["section_id"]
+
+    # Get episode name from TMDB data
+    ep_data = episodes[ep_index] if ep_index < len(episodes) else {}
+    ep_name = ep_data.get("name", f"الحلقة {overall_ep}")
+    ep_overview = ep_data.get("overview", "")
+
+    keyboard = [
+        [InlineKeyboardButton("⏸️ إيقاف مؤقت والإكمال لاحقاً", callback_data="series_pause")],
+        [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
+    ]
+
+    text = (
+        f"📺 <b>{series_name} - الموسم {season_num}</b>\n"
+        f"📁 <b>القسم الحالي:</b> {section_id}\n\n"
+        f"🎬 <b>الحلقة {overall_ep} من {total_episodes}</b>\n"
+        f"📝 <b>عنوان الحلقة:</b> {ep_name}\n\n"
+        f"<b>أرسل رابط الحلقة {overall_ep}:</b>"
+    )
+
+    if edit:
+        query = update.callback_query
+        try:
+            await query.edit_message_text(
+                text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            await query.message.reply_text(
+                text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.HTML,
+            )
+    else:
+        await update.message.reply_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.HTML,
+        )
+
+    return SERIES_ENTER_EPISODE_LINK
+
+
+async def series_handle_episode_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle receiving an episode link - upload to Mux."""
+    video_url = update.message.text.strip()
+    upload_plan = context.user_data.get("series_upload_plan", [])
+    plan_index = context.user_data.get("series_current_plan_index", 0)
+    ep_index = context.user_data.get("series_current_ep_index", 0)
+    series_name = context.user_data.get("series_name")
+    season_num = context.user_data.get("series_current_season")
+    total_episodes = context.user_data.get("series_total_episodes", 0)
+    episodes = context.user_data.get("series_episodes", [])
+
+    overall_ep = ep_index + 1
+    current_plan = upload_plan[plan_index]
+    creds = current_plan["creds"]
+    section_id = current_plan["section_id"]
+
+    # Get episode name
+    ep_data = episodes[ep_index] if ep_index < len(episodes) else {}
+    ep_name = ep_data.get("name", f"الحلقة {overall_ep}")
+
+    # Build passthrough name: "SeriesName - S01E01 - EpisodeName"
+    passthrough_name = f"{series_name} - S{season_num:02d}E{overall_ep:02d} - {ep_name}"
+
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
+    status_msg = await update.message.reply_text(
+        f"⏳ <b>جاري رفع الحلقة {overall_ep} من {total_episodes}...</b>\n\n"
+        f"📝 {passthrough_name}",
+        parse_mode=ParseMode.HTML,
+    )
+
+    try:
+        response = requests.post(
+            "https://api.mux.com/video/v1/assets",
+            json={
+                "input": [{"url": video_url}],
+                "playback_policy": ["public"],
+                "passthrough": passthrough_name,
+            },
+            auth=(creds["id"], creds["secret"]),
+            timeout=30,
+        )
+
+        if response.status_code == 201:
+            res_data = response.json()["data"]
+            asset_id = res_data["id"]
+            playback_ids = res_data.get("playback_ids", [])
+            playback_id = playback_ids[0]["id"] if playback_ids else "قيد الانتظار..."
+
+            # Store playback ID
+            uploaded = context.user_data.get("series_uploaded_playback_ids", [])
+            uploaded.append((overall_ep, playback_id, passthrough_name))
+            context.user_data["series_uploaded_playback_ids"] = uploaded
+
+            # Also store in the season playback IDs
+            all_pids = context.user_data.get("series_all_playback_ids", {})
+            season_key = str(season_num)
+            if season_key not in all_pids:
+                all_pids[season_key] = {}
+            all_pids[season_key][str(overall_ep)] = playback_id
+            context.user_data["series_all_playback_ids"] = all_pids
+
+            # Track asset status in background
+            asyncio.create_task(
+                track_asset_status(
+                    update.effective_chat.id,
+                    context.bot,
+                    asset_id,
+                    creds,
+                    passthrough_name,
+                    playback_id,
+                )
+            )
+
+            await status_msg.edit_text(
+                f"✅ <b>تم رفع الحلقة {overall_ep} بنجاح!</b>\n\n"
+                f"📝 {passthrough_name}\n"
+                f"📁 القسم: {section_id}\n"
+                f"🆔 Playback ID: <code>{playback_id}</code>\n\n"
+                f"📊 التقدم: {overall_ep}/{total_episodes}",
+                parse_mode=ParseMode.HTML,
+            )
+
+            # Move to next episode
+            context.user_data["series_current_ep_index"] = ep_index + 1
+
+            # Ask for next episode
+            return await series_ask_next_episode(update, context, edit=False)
+
+        else:
+            error_msg = response.json().get("error", {}).get("message", "خطأ غير معروف")
+            keyboard = [
+                [InlineKeyboardButton("🔄 إعادة المحاولة", callback_data="series_retry_ep")],
+                [InlineKeyboardButton("⏭️ تخطي هذه الحلقة", callback_data="series_skip_ep")],
+                [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
+            ]
+            await status_msg.edit_text(
+                f"❌ <b>فشل رفع الحلقة {overall_ep}</b>\n\n"
+                f"الخطأ: {error_msg}\n\n"
+                "اختر إجراء:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.HTML,
+            )
+            return SERIES_ENTER_EPISODE_LINK
+
+    except Exception as e:
+        keyboard = [
+            [InlineKeyboardButton("🔄 إعادة المحاولة", callback_data="series_retry_ep")],
+            [InlineKeyboardButton("⏭️ تخطي هذه الحلقة", callback_data="series_skip_ep")],
+            [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
+        ]
+        await status_msg.edit_text(
+            f"⚠️ <b>خطأ في رفع الحلقة {overall_ep}</b>\n\n{str(e)}",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.HTML,
+        )
+        return SERIES_ENTER_EPISODE_LINK
+
+
+async def series_episode_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle callbacks during episode upload (retry, skip, pause)."""
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "menu_back":
+        return await show_main_menu(update, context, edit=True)
+
+    if query.data == "series_retry_ep":
+        # Ask for the same episode again
+        return await series_ask_next_episode(update, context, edit=True)
+
+    if query.data == "series_skip_ep":
+        # Skip current episode
+        ep_index = context.user_data.get("series_current_ep_index", 0)
+        overall_ep = ep_index + 1
+        # Store a placeholder
+        uploaded = context.user_data.get("series_uploaded_playback_ids", [])
+        uploaded.append((overall_ep, "تم_التخطي", "تم التخطي"))
+        context.user_data["series_uploaded_playback_ids"] = uploaded
+        context.user_data["series_current_ep_index"] = ep_index + 1
+        return await series_ask_next_episode(update, context, edit=True)
+
+    if query.data == "series_pause":
+        return await series_pause(update, context)
+
+
+async def series_pause(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Pause the upload and show summary so far."""
+    query = update.callback_query
+    series_name = context.user_data.get("series_name")
+    season_num = context.user_data.get("series_current_season")
+    ep_index = context.user_data.get("series_current_ep_index", 0)
+    total_episodes = context.user_data.get("series_total_episodes", 0)
+    uploaded = context.user_data.get("series_uploaded_playback_ids", [])
+
+    text = (
+        f"⏸️ <b>تم إيقاف الرفع مؤقتاً</b>\n\n"
+        f"📺 <b>{series_name} - الموسم {season_num}</b>\n"
+        f"📊 <b>تم رفع:</b> {ep_index} من {total_episodes} حلقة\n\n"
+    )
+
+    if uploaded:
+        text += "<b>الحلقات المرفوعة:</b>\n"
+        for ep_num, pid, name in uploaded:
+            if pid == "تم_التخطي":
+                text += f"  الحلقة {ep_num}: ⏭️ تم التخطي\n"
+            else:
+                text += f"  الحلقة {ep_num}: <code>{pid}</code>\n"
+
+    text += "\n<i>يمكنك الاستكمال لاحقاً من القائمة الرئيسية.</i>"
+
+    keyboard = [
+        [InlineKeyboardButton("▶️ استكمال الرفع", callback_data="series_resume")],
+        [InlineKeyboardButton("📋 عرض معرفات التشغيل", callback_data="series_show_ids")],
+        [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
+    ]
+
+    await query.edit_message_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML,
+    )
+    return SERIES_SEASON_DONE
+
+
+async def series_season_complete(update: Update, context: ContextTypes.DEFAULT_TYPE, edit: bool = True):
+    """Show completion message for the season."""
+    series_name = context.user_data.get("series_name")
+    season_num = context.user_data.get("series_current_season")
+    total_episodes = context.user_data.get("series_total_episodes", 0)
+    uploaded = context.user_data.get("series_uploaded_playback_ids", [])
+    seasons = context.user_data.get("series_seasons", [])
+
+    successful = [u for u in uploaded if u[1] != "تم_التخطي"]
+    skipped = [u for u in uploaded if u[1] == "تم_التخطي"]
+
+    text = (
+        f"✅ <b>اكتمل رفع الموسم {season_num}!</b>\n\n"
+        f"📺 <b>{series_name}</b>\n"
+        f"📊 <b>إجمالي الحلقات:</b> {total_episodes}\n"
+        f"✅ <b>تم رفعها:</b> {len(successful)}\n"
+    )
+
+    if skipped:
+        text += f"⏭️ <b>تم تخطيها:</b> {len(skipped)}\n"
+
+    text += "\n<b>معرفات التشغيل (بالترتيب):</b>\n"
+    # Sort by episode number
+    sorted_uploaded = sorted(uploaded, key=lambda x: x[0])
+    for ep_num, pid, name in sorted_uploaded:
+        if pid == "تم_التخطي":
+            text += f"  الحلقة {ep_num}: ⏭️ تم التخطي\n"
+        else:
+            text += f"  الحلقة {ep_num}: <code>{pid}</code>\n"
+
+    # Check if there are more seasons
+    keyboard = []
+    other_seasons = [s for s in seasons if s.get("season_number") != season_num]
+    if other_seasons:
+        keyboard.append([InlineKeyboardButton("📺 إضافة موسم آخر", callback_data="series_back_to_seasons")])
+    keyboard.append([InlineKeyboardButton("📋 نسخ جميع المعرفات", callback_data="series_copy_all_ids")])
+    keyboard.append([InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")])
+
+    if edit:
+        query = update.callback_query
+        try:
+            await query.edit_message_text(
+                text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            await query.message.reply_text(
+                text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.HTML,
+            )
+    else:
+        await update.message.reply_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.HTML,
+        )
+
+    return SERIES_SEASON_DONE
+
+
+async def series_season_done_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle actions after season is complete or paused."""
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "menu_back":
+        return await show_main_menu(update, context, edit=True)
+
+    if query.data == "series_back_to_seasons":
+        return await series_back_to_seasons(update, context)
+
+    if query.data == "series_resume":
+        # Resume uploading from where we left off
+        return await series_ask_next_episode(update, context, edit=True)
+
+    if query.data == "series_show_ids":
+        return await series_show_all_playback_ids(update, context)
+
+    if query.data == "series_copy_all_ids":
+        return await series_copy_all_ids(update, context)
+
+    if query.data == "series_back_to_done":
+        return await series_season_complete(update, context, edit=True)
+
+
+async def series_back_to_seasons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Go back to season selection screen."""
+    query = update.callback_query
+    series_name = context.user_data.get("series_name")
+    tmdb_id = context.user_data.get("series_tmdb_id")
+    seasons = context.user_data.get("series_seasons", [])
+
+    # Reset episode tracking for new season
+    context.user_data.pop("series_current_ep_index", None)
+    context.user_data.pop("series_current_plan_index", None)
+    context.user_data.pop("series_uploaded_playback_ids", None)
+    context.user_data.pop("series_upload_plan", None)
+
+    keyboard = []
+    row = []
+    for i, season in enumerate(seasons, 1):
+        s_num = season.get("season_number", i)
+        ep_count = season.get("episode_count", 0)
+        btn_text = f"الموسم {s_num} ({ep_count} حلقة)"
+        row.append(InlineKeyboardButton(btn_text, callback_data=f"series_season_{s_num}"))
+        if i % 2 == 0:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+
+    # Add option to view all accumulated playback IDs
+    all_pids = context.user_data.get("series_all_playback_ids", {})
+    if all_pids:
+        keyboard.append([InlineKeyboardButton("📋 عرض جميع معرفات التشغيل", callback_data="series_show_all_ids")])
+
+    keyboard.append([InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")])
+
+    text = (
+        f"📺 <b>{series_name}</b>\n"
+        f"🆔 TMDB ID: <code>{tmdb_id}</code>\n\n"
+    )
+
+    for season in seasons:
+        s_num = season.get("season_number", 0)
+        ep_count = season.get("episode_count", 0)
+        # Check if this season has been uploaded
+        season_key = str(s_num)
+        if season_key in all_pids and all_pids[season_key]:
+            uploaded_count = len(all_pids[season_key])
+            text += f"  الموسم {s_num}: {ep_count} حلقة (✅ تم رفع {uploaded_count})\n"
+        else:
+            text += f"  الموسم {s_num}: {ep_count} حلقة\n"
+
+    text += "\n<b>اختر الموسم:</b>"
+
+    await query.edit_message_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML,
+    )
+    return SERIES_SELECT_SEASON
+
+
+async def series_show_all_playback_ids(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show all playback IDs for the current season - ordered from episode 1 downward."""
+    query = update.callback_query
+    series_name = context.user_data.get("series_name")
+    season_num = context.user_data.get("series_current_season")
+    uploaded = context.user_data.get("series_uploaded_playback_ids", [])
+
+    text = f"📋 <b>{series_name} - الموسم {season_num} - معرفات التشغيل</b>\n\n"
+
+    # Sort by episode number (from 1 downward)
+    sorted_uploaded = sorted(uploaded, key=lambda x: x[0])
+
+    all_ids = []
+    for ep_num, pid, name in sorted_uploaded:
+        if pid == "تم_التخطي":
+            text += f"الحلقة {ep_num}: ⏭️ تم التخطي\n"
+        else:
+            text += f"الحلقة {ep_num}: <code>{pid}</code>\n"
+            all_ids.append(pid)
+
+    if all_ids:
+        text += f"\n<b>نسخ سريع (جميع المعرفات بالترتيب):</b>\n<code>{chr(10).join(all_ids)}</code>"
+
+    keyboard = [
+        [InlineKeyboardButton("🔙 رجوع", callback_data="series_back_to_done")],
+        [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
+    ]
+
+    await query.edit_message_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML,
+    )
+    return SERIES_SEASON_DONE
+
+
+async def series_copy_all_ids(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Copy all playback IDs for the current season."""
+    query = update.callback_query
+    uploaded = context.user_data.get("series_uploaded_playback_ids", [])
+
+    sorted_uploaded = sorted(uploaded, key=lambda x: x[0])
+    all_ids = [pid for ep_num, pid, name in sorted_uploaded if pid != "تم_التخطي"]
+
+    if all_ids:
+        ids_text = "\n".join(all_ids)
+        await query.message.reply_text(
+            f"📋 <b>جميع معرفات التشغيل (بالترتيب):</b>\n\n<code>{ids_text}</code>",
+            parse_mode=ParseMode.HTML,
+        )
+    else:
+        await query.answer("لا توجد معرفات تشغيل متاحة", show_alert=True)
+
+    return SERIES_SEASON_DONE
+
+
+async def series_show_all_seasons_ids(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show all playback IDs across all uploaded seasons."""
+    query = update.callback_query
+    await query.answer()
+
+    series_name = context.user_data.get("series_name")
+    all_pids = context.user_data.get("series_all_playback_ids", {})
+
+    text = f"📋 <b>{series_name} - جميع معرفات التشغيل</b>\n\n"
+
+    all_ids_flat = []
+    for season_key in sorted(all_pids.keys(), key=lambda x: int(x)):
+        season_eps = all_pids[season_key]
+        text += f"<b>الموسم {season_key}:</b>\n"
+        for ep_key in sorted(season_eps.keys(), key=lambda x: int(x)):
+            pid = season_eps[ep_key]
+            text += f"  الحلقة {ep_key}: <code>{pid}</code>\n"
+            if pid != "تم_التخطي":
+                all_ids_flat.append(pid)
+        text += "\n"
+
+    if all_ids_flat:
+        text += f"<b>نسخ سريع:</b>\n<code>{chr(10).join(all_ids_flat)}</code>"
+
+    keyboard = [
+        [InlineKeyboardButton("🔙 رجوع للمواسم", callback_data="series_back_to_seasons")],
+        [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
+    ]
+
+    await query.edit_message_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML,
+    )
+    return SERIES_SELECT_SEASON
+
+
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "❌ <b>تم إلغاء العملية</b>\n\n" "استخدم /start للبدء من جديد.",
@@ -1296,6 +2124,34 @@ def main():
             ADD_SECTION_MUX_SECRET: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_add_section_mux_secret),
                 CallbackQueryHandler(main_menu_handler, pattern="^menu_back$"),
+            ],
+            # Series states
+            SERIES_ENTER_TMDB_ID: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, series_handle_tmdb_id),
+                CallbackQueryHandler(main_menu_handler, pattern="^menu_back$"),
+            ],
+            SERIES_SELECT_SEASON: [
+                CallbackQueryHandler(series_select_season, pattern="^series_season_"),
+                CallbackQueryHandler(series_show_all_seasons_ids, pattern="^series_show_all_ids$"),
+                CallbackQueryHandler(series_back_to_seasons, pattern="^series_back_to_seasons$"),
+                CallbackQueryHandler(main_menu_handler, pattern="^menu_back$"),
+                CallbackQueryHandler(main_menu_handler, pattern="^menu_add_section$"),
+            ],
+            SERIES_CONFIRM_PLAN: [
+                CallbackQueryHandler(series_confirm_plan, pattern="^series_confirm_start$"),
+                CallbackQueryHandler(series_back_to_seasons, pattern="^series_back_to_seasons$"),
+                CallbackQueryHandler(main_menu_handler, pattern="^menu_back$"),
+            ],
+            SERIES_ENTER_EPISODE_LINK: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, series_handle_episode_link),
+                CallbackQueryHandler(series_episode_callback, pattern="^series_"),
+                CallbackQueryHandler(main_menu_handler, pattern="^menu_back$"),
+            ],
+            SERIES_SEASON_DONE: [
+                CallbackQueryHandler(series_season_done_handler, pattern="^series_|^menu_back$"),
+            ],
+            SERIES_SHOW_PLAYBACK_IDS: [
+                CallbackQueryHandler(series_season_done_handler, pattern="^series_|^menu_back$"),
             ],
         },
         fallbacks=[
