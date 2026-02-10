@@ -419,13 +419,21 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edi
     keyboard = [
         [InlineKeyboardButton("📤 رفع فيديو", callback_data="menu_upload")],
         [InlineKeyboardButton("📺 إضافة مسلسل كامل", callback_data="menu_series")],
+    ]
+
+    # Add "continue series" button if there's an active series session
+    if context.user_data.get("series_tmdb_id"):
+        series_name = context.user_data.get("series_name", "")
+        keyboard.append([InlineKeyboardButton(f"▶️ استكمال: {series_name}", callback_data="menu_series_continue")])
+
+    keyboard.extend([
         [InlineKeyboardButton("🔍 مراجعة القسم", callback_data="menu_review")],
         [InlineKeyboardButton("🗑️ حذف فيديو", callback_data="menu_delete")],
         [InlineKeyboardButton("🎞️ عرض معرفات التشغيل", callback_data="menu_playback")],
         [InlineKeyboardButton("📊 فحص السعة المباشر", callback_data="menu_capacity")],
         [InlineKeyboardButton("➕ إضافة قسم", callback_data="menu_add_section")],
         [InlineKeyboardButton("🔙 تبديل النظام", callback_data="menu_switch")],
-    ]
+    ])
 
     text = (
         f"🎬 <b>إدارة {system_name}</b>\n\n"
@@ -436,13 +444,24 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edi
 
     if edit:
         query = update.callback_query
-        await query.edit_message_text(
-            text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML
-        )
+        try:
+            await query.edit_message_text(
+                text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML
+            )
+        except Exception:
+            # If edit fails (e.g. photo message was deleted), send new message
+            await query.message.chat.send_message(
+                text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML
+            )
     else:
-        await update.message.reply_text(
-            text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML
-        )
+        if update.message:
+            await update.message.reply_text(
+                text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML
+            )
+        elif update.callback_query:
+            await update.callback_query.message.chat.send_message(
+                text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML
+            )
     return MAIN_MENU
 
 
@@ -455,6 +474,8 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await show_section_selector(update, context, "upload")
     elif action == "menu_series":
         return await series_start(update, context)
+    elif action == "menu_series_continue":
+        return await series_continue(update, context)
     elif action == "menu_review":
         return await show_section_selector(update, context, "review")
     elif action == "menu_delete":
@@ -800,7 +821,7 @@ async def track_asset_status(chat_id, bot, asset_id, creds, video_name, playback
                             f"🚨 <b>تنبيه: فشل معالجة الفيديو!</b>\n\n"
                             f"🎥 <b>الفيديو:</b> {video_name}\n"
                             f"❌ <b>الحالة:</b> خطأ في المعالجة\n\n"
-                            f"⚠️ <b>الرابط المصدر غير شغال!</b>\n"
+                            f"⚠️ <b>الرابط المصدر ��ير شغال!</b>\n"
                             f"📌 <b>تأكد من أن الرابط يعمل بشكل صحيح</b>\n\n"
                             f"<i>يرجى التحقق من الرابط والمحاولة مرة أخرى.</i>"
                         ),
@@ -1310,6 +1331,48 @@ async def series_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SERIES_ENTER_TMDB_ID
 
 
+async def series_continue(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Continue a previously started series - show seasons or resume episode upload."""
+    query = update.callback_query
+    series_name = context.user_data.get("series_name")
+    tmdb_id = context.user_data.get("series_tmdb_id")
+    seasons = context.user_data.get("series_seasons", [])
+    all_pids = context.user_data.get("series_all_playback_ids", {})
+
+    # Check if there's an active episode upload in progress
+    ep_index = context.user_data.get("series_current_ep_index")
+    total_episodes = context.user_data.get("series_total_episodes", 0)
+    upload_plan = context.user_data.get("series_upload_plan")
+
+    if ep_index is not None and upload_plan and ep_index < total_episodes:
+        # There's an active upload session - offer to resume
+        season_num = context.user_data.get("series_current_season")
+        keyboard = [
+            [InlineKeyboardButton(f"▶️ استكمال الموسم {season_num} (الحلقة {ep_index + 1})", callback_data="series_resume_from_menu")],
+            [InlineKeyboardButton("📺 اختيار موسم آخر", callback_data="series_back_to_seasons")],
+            [InlineKeyboardButton("📋 عرض جميع المعرفات", callback_data="series_show_all_ids")],
+            [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
+        ]
+
+        text = (
+            f"📺 <b>استكمال: {series_name}</b>\n"
+            f"🆔 TMDB ID: <code>{tmdb_id}</code>\n\n"
+            f"▶️ <b>يوجد رفع متوقف:</b>\n"
+            f"  الموسم {season_num} - الحلقة {ep_index + 1} من {total_episodes}\n\n"
+            "<b>ماذا تريد أن تفعل؟</b>"
+        )
+
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.HTML,
+        )
+        return SERIES_SEASON_DONE
+    else:
+        # No active upload - show seasons list
+        return await series_back_to_seasons(update, context)
+
+
 async def series_handle_tmdb_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle the TMDB ID input and show series info with seasons."""
     tmdb_id_text = update.message.text.strip()
@@ -1399,13 +1462,39 @@ async def series_handle_tmdb_id(update: Update, context: ContextTypes.DEFAULT_TY
     return SERIES_SELECT_SEASON
 
 
+async def _safe_send_or_edit(query, text, keyboard, parse_mode=ParseMode.HTML):
+    """Helper: try edit_message_text, fallback to delete + send new message for photo messages."""
+    try:
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=parse_mode,
+        )
+    except Exception:
+        # The message is likely a photo - delete it and send a new text message
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        await query.message.chat.send_message(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=parse_mode,
+        )
+
+
 async def series_select_season(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle season selection - check sections and show plan."""
     query = update.callback_query
     await query.answer()
 
     if query.data == "menu_back":
-        return await show_main_menu(update, context, edit=True)
+        # Delete the photo message and send a fresh text menu
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        return await show_main_menu(update, context, edit=False)
 
     season_num = int(query.data.replace("series_season_", ""))
     tmdb_id = context.user_data.get("series_tmdb_id")
@@ -1413,11 +1502,19 @@ async def series_select_season(update: Update, context: ContextTypes.DEFAULT_TYP
     system = context.user_data.get("system")
     system_name = get_system_name(system)
 
+    # Delete the photo/current message first, then work with fresh text messages
+    try:
+        await query.message.delete()
+    except Exception:
+        pass
+
+    chat = query.message.chat
+
     # Fetch season details from TMDB
     season_data = tmdb_get_season(tmdb_id, season_num)
     if not season_data:
         keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data="series_back_to_seasons")]]
-        await query.edit_message_text(
+        await chat.send_message(
             "❌ <b>فشل في جلب بيانات الموسم</b>\n\nحاول مرة أخرى.",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode=ParseMode.HTML,
@@ -1434,8 +1531,8 @@ async def series_select_season(update: Update, context: ContextTypes.DEFAULT_TYP
     # Calculate sections needed
     sections_needed = calculate_sections_needed(total_episodes)
 
-    # Check available sections
-    await query.edit_message_text(
+    # Show loading message
+    loading_msg = await chat.send_message(
         "⏳ <b>جاري فحص الأقسام المتاحة...</b>",
         parse_mode=ParseMode.HTML,
     )
@@ -1485,7 +1582,7 @@ async def series_select_season(update: Update, context: ContextTypes.DEFAULT_TYP
             [InlineKeyboardButton("🔙 رجوع للمواسم", callback_data="series_back_to_seasons")],
             [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
         ]
-        await query.edit_message_text(
+        await loading_msg.edit_text(
             text,
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode=ParseMode.HTML,
@@ -1507,7 +1604,7 @@ async def series_select_season(update: Update, context: ContextTypes.DEFAULT_TYP
             [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
         ]
 
-        await query.edit_message_text(
+        await loading_msg.edit_text(
             text,
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode=ParseMode.HTML,
@@ -1870,7 +1967,7 @@ async def series_season_done_handler(update: Update, context: ContextTypes.DEFAU
     if query.data == "series_back_to_seasons":
         return await series_back_to_seasons(update, context)
 
-    if query.data == "series_resume":
+    if query.data in ("series_resume", "series_resume_from_menu"):
         # Resume uploading from where we left off
         return await series_ask_next_episode(update, context, edit=True)
 
@@ -1935,11 +2032,7 @@ async def series_back_to_seasons(update: Update, context: ContextTypes.DEFAULT_T
 
     text += "\n<b>اختر الموسم:</b>"
 
-    await query.edit_message_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode=ParseMode.HTML,
-    )
+    await _safe_send_or_edit(query, text, keyboard)
     return SERIES_SELECT_SEASON
 
 
@@ -2028,11 +2121,7 @@ async def series_show_all_seasons_ids(update: Update, context: ContextTypes.DEFA
         [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
     ]
 
-    await query.edit_message_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode=ParseMode.HTML,
-    )
+    await _safe_send_or_edit(query, text, keyboard)
     return SERIES_SELECT_SEASON
 
 
@@ -2149,6 +2238,7 @@ def main():
             ],
             SERIES_SEASON_DONE: [
                 CallbackQueryHandler(series_season_done_handler, pattern="^series_|^menu_back$"),
+                CallbackQueryHandler(series_back_to_seasons, pattern="^series_back_to_seasons$"),
             ],
             SERIES_SHOW_PLAYBACK_IDS: [
                 CallbackQueryHandler(series_season_done_handler, pattern="^series_|^menu_back$"),
