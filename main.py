@@ -22,6 +22,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_REPO = os.getenv("GITHUB_REPO", "ffrrx-2000/cinema-ps")  # format: "username/repo"
 GITHUB_FILE_PATH = "sections.json"
+GITHUB_TRACKED_SERIES_PATH = "tracked_series.json"
 GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main")
 TMDB_API_KEY = "06f120992cfacd7c118f6e7086d23544"
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
@@ -217,6 +218,133 @@ def get_sections_for_system(system: str) -> dict:
     return sections.get(system, {})
 
 
+# ─── Tracked Series Storage (GitHub-persisted) ──────────────────────────────
+
+_tracked_series_cache = None
+_tracked_series_sha = None
+
+
+def load_tracked_series() -> list[dict]:
+    """Load tracked series from GitHub. Each entry:
+    {
+        "tmdb_id": int,
+        "name": str,
+        "poster_path": str,
+        "last_uploaded_episode": int,  # last ep number uploaded
+        "last_uploaded_season": int,   # season number
+        "total_episodes": int,         # total eps in current season
+        "added_at": str,               # ISO timestamp
+    }
+    """
+    global _tracked_series_cache, _tracked_series_sha
+
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        return _tracked_series_cache or []
+
+    try:
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_TRACKED_SERIES_PATH}"
+        headers = {
+            "Authorization": f"token {GITHUB_TOKEN}",
+            "Accept": "application/vnd.github.v3+json",
+        }
+        res = requests.get(url, headers=headers, params={"ref": GITHUB_BRANCH}, timeout=15)
+        if res.status_code == 200:
+            data = res.json()
+            content = base64.b64decode(data["content"]).decode("utf-8")
+            _tracked_series_sha = data["sha"]
+            _tracked_series_cache = json.loads(content)
+            return _tracked_series_cache
+        elif res.status_code == 404:
+            save_tracked_series([])
+            return []
+        return _tracked_series_cache or []
+    except Exception:
+        return _tracked_series_cache or []
+
+
+def save_tracked_series(series_list: list[dict]) -> bool:
+    """Save tracked series list to GitHub."""
+    global _tracked_series_cache, _tracked_series_sha
+
+    _tracked_series_cache = series_list
+
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        return False
+
+    try:
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_TRACKED_SERIES_PATH}"
+        headers = {
+            "Authorization": f"token {GITHUB_TOKEN}",
+            "Accept": "application/vnd.github.v3+json",
+        }
+        content = json.dumps(series_list, indent=2, ensure_ascii=False)
+        content_b64 = base64.b64encode(content.encode("utf-8")).decode("utf-8")
+
+        body = {
+            "message": f"Update tracked_series.json - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            "content": content_b64,
+            "branch": GITHUB_BRANCH,
+        }
+
+        if _tracked_series_sha:
+            body["sha"] = _tracked_series_sha
+        else:
+            r = requests.get(url, headers=headers, params={"ref": GITHUB_BRANCH}, timeout=10)
+            if r.status_code == 200:
+                body["sha"] = r.json()["sha"]
+
+        res = requests.put(url, headers=headers, json=body, timeout=30)
+        if res.status_code in [200, 201]:
+            _tracked_series_sha = res.json()["content"]["sha"]
+            return True
+        return False
+    except Exception:
+        return False
+
+
+def find_tracked_series(tmdb_id: int) -> dict | None:
+    """Find a tracked series by TMDB ID."""
+    tracked = load_tracked_series()
+    for s in tracked:
+        if s.get("tmdb_id") == tmdb_id:
+            return s
+    return None
+
+
+def upsert_tracked_series(tmdb_id: int, name: str, poster_path: str,
+                          season_num: int, last_ep: int, total_eps: int):
+    """Add or update a tracked series entry."""
+    tracked = load_tracked_series()
+    found = False
+    for s in tracked:
+        if s.get("tmdb_id") == tmdb_id:
+            s["name"] = name
+            s["poster_path"] = poster_path
+            s["last_uploaded_season"] = season_num
+            s["last_uploaded_episode"] = last_ep
+            s["total_episodes"] = total_eps
+            found = True
+            break
+    if not found:
+        tracked.append({
+            "tmdb_id": tmdb_id,
+            "name": name,
+            "poster_path": poster_path,
+            "last_uploaded_season": season_num,
+            "last_uploaded_episode": last_ep,
+            "total_episodes": total_eps,
+            "added_at": datetime.now().isoformat(),
+        })
+    save_tracked_series(tracked)
+
+
+def remove_tracked_series(tmdb_id: int):
+    """Remove a tracked series."""
+    tracked = load_tracked_series()
+    tracked = [s for s in tracked if s.get("tmdb_id") != tmdb_id]
+    save_tracked_series(tracked)
+
+
 # ─── TMDB Helper Functions ───────────────────────────────────────────────────
 
 def tmdb_get_series(tmdb_id: int) -> dict | None:
@@ -311,7 +439,11 @@ user_auth_cache = {}
     SERIES_ENTER_EPISODE_LINK,
     SERIES_SEASON_DONE,
     SERIES_SHOW_PLAYBACK_IDS,
-) = range(21)
+    # Tracked series states
+    TRACKED_SERIES_LIST,
+    TRACKED_SERIES_DETAIL,
+    TRACKED_SERIES_ADD_LINK,
+) = range(24)
 
 
 def is_user_authenticated(user_id: int, system: str) -> bool:
@@ -418,13 +550,17 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edi
 
     keyboard = [
         [InlineKeyboardButton("📤 رفع فيديو", callback_data="menu_upload")],
-        [InlineKeyboardButton("📺 إضافة مسلسل كامل", callback_data="menu_series")],
     ]
 
-    # Add "continue series" button if there's an active series session
-    if context.user_data.get("series_tmdb_id"):
-        series_name = context.user_data.get("series_name", "")
-        keyboard.append([InlineKeyboardButton(f"▶️ استكمال: {series_name}", callback_data="menu_series_continue")])
+    # Series features only for Cinema Plus
+    if system == "cinema_plus":
+        keyboard.append([InlineKeyboardButton("📺 إضافة مسلسل كامل", callback_data="menu_series")])
+        # Show tracked series button if there are any
+        tracked = load_tracked_series()
+        if tracked:
+            keyboard.append([InlineKeyboardButton(f"🔄 تتبع المسلسلات ({len(tracked)})", callback_data="menu_tracked")])
+        else:
+            keyboard.append([InlineKeyboardButton("🔄 تتبع المسلسلات", callback_data="menu_tracked")])
 
     keyboard.extend([
         [InlineKeyboardButton("🔍 مراجعة القسم", callback_data="menu_review")],
@@ -474,8 +610,8 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await show_section_selector(update, context, "upload")
     elif action == "menu_series":
         return await series_start(update, context)
-    elif action == "menu_series_continue":
-        return await series_continue(update, context)
+    elif action == "menu_tracked":
+        return await tracked_series_list(update, context)
     elif action == "menu_review":
         return await show_section_selector(update, context, "review")
     elif action == "menu_delete":
@@ -1575,7 +1711,7 @@ async def series_select_season(update: Update, context: ContextTypes.DEFAULT_TYP
         text += (
             f"⚠️ <b>تحتاج إلى {extra_sections} قسم/أقسام إضافية!</b>\n"
             f"📌 ينقصك <b>{missing_slots}</b> مكان لاستيعاب جميع الحلقات.\n\n"
-            "<b>الرجاء إضافة أقسام جديدة أولاً ثم العودة.</b>"
+            "<b>الرجاء إضافة أقسام ��ديدة أولاً ثم العودة.</b>"
         )
         keyboard = [
             [InlineKeyboardButton("➕ إضافة قسم جديد", callback_data="menu_add_section")],
@@ -1790,6 +1926,24 @@ async def series_handle_episode_link(update: Update, context: ContextTypes.DEFAU
                 f"🆔 Playback ID: <code>{playback_id}</code>\n\n"
                 f"📊 التقدم: {overall_ep}/{total_episodes}",
                 parse_mode=ParseMode.HTML,
+            )
+
+            # Update tracked series in persistent storage
+            tmdb_id = context.user_data.get("series_tmdb_id")
+            poster_path = ""
+            # Try to get poster from TMDB data
+            series_seasons = context.user_data.get("series_seasons", [])
+            for s in series_seasons:
+                if s.get("poster_path"):
+                    poster_path = s["poster_path"]
+                    break
+            upsert_tracked_series(
+                tmdb_id=tmdb_id,
+                name=series_name,
+                poster_path=poster_path,
+                season_num=season_num,
+                last_ep=overall_ep,
+                total_eps=total_episodes,
             )
 
             # Move to next episode
@@ -2125,6 +2279,406 @@ async def series_show_all_seasons_ids(update: Update, context: ContextTypes.DEFA
     return SERIES_SELECT_SEASON
 
 
+# ─── Tracked Series Handlers (Cinema Plus only) ─────────────────────────────
+
+async def tracked_series_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show list of all tracked series with their status."""
+    query = update.callback_query
+    tracked = load_tracked_series()
+
+    if not tracked:
+        keyboard = [
+            [InlineKeyboardButton("📺 إضافة مسلسل جديد", callback_data="menu_series")],
+            [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
+        ]
+        await query.edit_message_text(
+            "🔄 <b>تتبع المسلسلات</b>\n\n"
+            "لا توجد مسلسلات متتبعة حالياً.\n"
+            "عند إضافة مسلسل كامل، سيتم تتبعه تلقائياً هنا.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.HTML,
+        )
+        return TRACKED_SERIES_LIST
+
+    text = "🔄 <b>تتبع المسلسلات - سينما بلس</b>\n\n"
+
+    keyboard = []
+    for s in tracked:
+        tmdb_id = s.get("tmdb_id")
+        name = s.get("name", "غير معروف")
+        last_ep = s.get("last_uploaded_episode", 0)
+        last_season = s.get("last_uploaded_season", 1)
+        total_eps = s.get("total_episodes", 0)
+        next_ep = last_ep + 1
+
+        if last_ep >= total_eps:
+            status = f"✅ الموسم {last_season} مكتمل ({total_eps} حلقة)"
+        else:
+            status = f"الموسم {last_season} - {last_ep}/{total_eps} حلقة"
+
+        text += f"📺 <b>{name}</b>\n   {status}\n\n"
+        btn_label = f"{name} (الحلقة {next_ep})" if last_ep < total_eps else f"{name} (مكتمل)"
+        keyboard.append([InlineKeyboardButton(btn_label, callback_data=f"tracked_{tmdb_id}")])
+
+    keyboard.append([InlineKeyboardButton("📺 إضافة مسلسل جديد", callback_data="menu_series")])
+    keyboard.append([InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")])
+
+    await query.edit_message_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML,
+    )
+    return TRACKED_SERIES_LIST
+
+
+async def tracked_series_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle callback from tracked series list."""
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "menu_back":
+        return await show_main_menu(update, context, edit=True)
+
+    if query.data == "menu_series":
+        return await series_start(update, context)
+
+    if query.data == "tracked_back_list":
+        return await tracked_series_list(update, context)
+
+    # Extract TMDB ID (format: tracked_123456)
+    tmdb_id_str = query.data.replace("tracked_", "")
+    if not tmdb_id_str.isdigit():
+        return await tracked_series_list(update, context)
+    tmdb_id = int(tmdb_id_str)
+    return await tracked_series_show_detail(update, context, tmdb_id)
+
+
+async def tracked_series_show_detail(update: Update, context: ContextTypes.DEFAULT_TYPE, tmdb_id: int):
+    """Show detail for a tracked series with option to add next episode."""
+    query = update.callback_query
+    tracked_entry = find_tracked_series(tmdb_id)
+
+    if not tracked_entry:
+        await query.answer("لم يتم العثور على المسلسل", show_alert=True)
+        return TRACKED_SERIES_LIST
+
+    name = tracked_entry.get("name", "غير معروف")
+    last_ep = tracked_entry.get("last_uploaded_episode", 0)
+    last_season = tracked_entry.get("last_uploaded_season", 1)
+    total_eps = tracked_entry.get("total_episodes", 0)
+    next_ep = last_ep + 1
+
+    # Store for later use
+    context.user_data["tracked_tmdb_id"] = tmdb_id
+    context.user_data["tracked_name"] = name
+    context.user_data["tracked_season"] = last_season
+    context.user_data["tracked_last_ep"] = last_ep
+    context.user_data["tracked_total_eps"] = total_eps
+
+    # Fetch fresh episode info from TMDB
+    season_data = tmdb_get_season(tmdb_id, last_season)
+    episodes = season_data.get("episodes", []) if season_data else []
+
+    # Update total episodes from TMDB (might have changed)
+    if episodes:
+        total_eps = len(episodes)
+        context.user_data["tracked_total_eps"] = total_eps
+        tracked_entry["total_episodes"] = total_eps
+
+    context.user_data["tracked_episodes_data"] = episodes
+
+    keyboard = []
+
+    if next_ep <= total_eps:
+        # There's a next episode to add
+        ep_data = episodes[next_ep - 1] if next_ep <= len(episodes) else {}
+        ep_name = ep_data.get("name", f"الحلقة {next_ep}")
+
+        context.user_data["tracked_next_ep"] = next_ep
+        context.user_data["tracked_next_ep_name"] = ep_name
+
+        text = (
+            f"📺 <b>{name}</b>\n"
+            f"🆔 TMDB ID: <code>{tmdb_id}</code>\n\n"
+            f"📊 <b>الموسم {last_season}:</b> {last_ep}/{total_eps} حلقة مرفوعة\n\n"
+            f"➡️ <b>الحلقة التالية:</b> {next_ep} - {ep_name}\n\n"
+            "<b>اختر إجراء:</b>"
+        )
+        keyboard.append([InlineKeyboardButton(f"➕ إضافة الحلقة {next_ep}", callback_data="tracked_add_ep")])
+    else:
+        # Season is complete - check if there's a next season
+        series_data = tmdb_get_series(tmdb_id)
+        all_seasons = []
+        if series_data:
+            all_seasons = [s for s in series_data.get("seasons", []) if s.get("season_number", 0) > 0]
+
+        next_season_exists = any(s.get("season_number") == last_season + 1 for s in all_seasons)
+
+        text = (
+            f"📺 <b>{name}</b>\n"
+            f"🆔 TMDB ID: <code>{tmdb_id}</code>\n\n"
+            f"✅ <b>الموسم {last_season} مكتمل!</b> ({total_eps}/{total_eps} حلقة)\n\n"
+        )
+
+        if next_season_exists:
+            next_s = last_season + 1
+            next_season_data = next((s for s in all_seasons if s.get("season_number") == next_s), {})
+            next_ep_count = next_season_data.get("episode_count", 0)
+            text += f"📺 <b>الموسم {next_s} متاح!</b> ({next_ep_count} حلقة)\n\n"
+            keyboard.append([InlineKeyboardButton(f"📺 بدء الموسم {next_s}", callback_data=f"tracked_new_season_{next_s}")])
+        else:
+            text += "<i>لا يوجد موسم جديد متاح حالياً.</i>\n\n"
+
+    keyboard.append([InlineKeyboardButton("🗑️ إزالة من التتبع", callback_data="tracked_remove")])
+    keyboard.append([InlineKeyboardButton("🔙 رجوع للمسلسلات", callback_data="tracked_back_list")])
+    keyboard.append([InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")])
+
+    await query.edit_message_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML,
+    )
+    return TRACKED_SERIES_DETAIL
+
+
+async def tracked_series_detail_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle callbacks from tracked series detail view."""
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "menu_back":
+        return await show_main_menu(update, context, edit=True)
+
+    if query.data == "tracked_back_list":
+        return await tracked_series_list(update, context)
+
+    if query.data == "tracked_remove":
+        tmdb_id = context.user_data.get("tracked_tmdb_id")
+        name = context.user_data.get("tracked_name")
+        remove_tracked_series(tmdb_id)
+        keyboard = [[InlineKeyboardButton("🔙 رجوع للمسلسلات", callback_data="tracked_back_list")]]
+        await query.edit_message_text(
+            f"🗑️ <b>تم إزالة «{name}» من التتبع</b>",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.HTML,
+        )
+        return TRACKED_SERIES_LIST
+
+    if query.data == "tracked_add_ep":
+        # Find a section with free space and ask for the link
+        system = "cinema_plus"
+        available = get_available_sections_with_space(system)
+        if not available:
+            keyboard = [
+                [InlineKeyboardButton("➕ إضافة قسم جديد", callback_data="menu_add_section")],
+                [InlineKeyboardButton("🔙 رجوع", callback_data="tracked_back_list")],
+            ]
+            await query.edit_message_text(
+                "⚠️ <b>لا توجد أقسام متاحة بها مساحة فارغة!</b>\n\n"
+                "الرجاء إضافة قسم جديد أولاً.",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.HTML,
+            )
+            return TRACKED_SERIES_LIST
+
+        # Pick the first section with space
+        section = available[0]
+        context.user_data["tracked_upload_section"] = section
+
+        name = context.user_data.get("tracked_name")
+        next_ep = context.user_data.get("tracked_next_ep")
+        ep_name = context.user_data.get("tracked_next_ep_name")
+        season_num = context.user_data.get("tracked_season")
+
+        keyboard = [
+            [InlineKeyboardButton("🔙 رجوع", callback_data="tracked_cancel_ep")],
+        ]
+
+        await query.edit_message_text(
+            f"📺 <b>{name} - الموسم {season_num}</b>\n"
+            f"📁 <b>القسم:</b> {section['section_id']} ({section['used']}/10)\n\n"
+            f"🎬 <b>الحلقة {next_ep}:</b> {ep_name}\n\n"
+            f"<b>أرسل رابط الحلقة {next_ep}:</b>",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.HTML,
+        )
+        return TRACKED_SERIES_ADD_LINK
+
+    if query.data.startswith("tracked_new_season_"):
+        # Start a new season for this tracked series
+        new_season = int(query.data.replace("tracked_new_season_", ""))
+        tmdb_id = context.user_data.get("tracked_tmdb_id")
+        name = context.user_data.get("tracked_name")
+
+        # Update tracking to new season, episode 0
+        poster_path = ""
+        tracked_entry = find_tracked_series(tmdb_id)
+        if tracked_entry:
+            poster_path = tracked_entry.get("poster_path", "")
+
+        season_data = tmdb_get_season(tmdb_id, new_season)
+        new_total = len(season_data.get("episodes", [])) if season_data else 0
+
+        upsert_tracked_series(
+            tmdb_id=tmdb_id,
+            name=name,
+            poster_path=poster_path,
+            season_num=new_season,
+            last_ep=0,
+            total_eps=new_total,
+        )
+
+        # Show the detail view for the new season
+        return await tracked_series_show_detail(update, context, tmdb_id)
+
+
+async def tracked_series_add_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle receiving a link for a tracked series episode."""
+    video_url = update.message.text.strip()
+
+    name = context.user_data.get("tracked_name")
+    tmdb_id = context.user_data.get("tracked_tmdb_id")
+    next_ep = context.user_data.get("tracked_next_ep")
+    season_num = context.user_data.get("tracked_season")
+    total_eps = context.user_data.get("tracked_total_eps")
+    section = context.user_data.get("tracked_upload_section")
+    episodes_data = context.user_data.get("tracked_episodes_data", [])
+
+    ep_data = episodes_data[next_ep - 1] if next_ep <= len(episodes_data) else {}
+    ep_name = ep_data.get("name", f"الحلقة {next_ep}")
+
+    creds = section["creds"]
+    section_id = section["section_id"]
+
+    passthrough_name = f"{name} - S{season_num:02d}E{next_ep:02d} - {ep_name}"
+
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
+    status_msg = await update.message.reply_text(
+        f"⏳ <b>جاري رفع الحلقة {next_ep}...</b>\n\n"
+        f"📝 {passthrough_name}\n"
+        f"📁 القسم: {section_id}",
+        parse_mode=ParseMode.HTML,
+    )
+
+    try:
+        response = requests.post(
+            "https://api.mux.com/video/v1/assets",
+            json={
+                "input": [{"url": video_url}],
+                "playback_policy": ["public"],
+                "passthrough": passthrough_name,
+            },
+            auth=(creds["id"], creds["secret"]),
+            timeout=30,
+        )
+
+        if response.status_code == 201:
+            res_data = response.json()["data"]
+            asset_id = res_data["id"]
+            playback_ids = res_data.get("playback_ids", [])
+            playback_id = playback_ids[0]["id"] if playback_ids else "قيد الانتظار..."
+
+            # Update tracked series
+            poster_path = ""
+            tracked_entry = find_tracked_series(tmdb_id)
+            if tracked_entry:
+                poster_path = tracked_entry.get("poster_path", "")
+
+            upsert_tracked_series(
+                tmdb_id=tmdb_id,
+                name=name,
+                poster_path=poster_path,
+                season_num=season_num,
+                last_ep=next_ep,
+                total_eps=total_eps,
+            )
+
+            # Track asset
+            asyncio.create_task(
+                track_asset_status(
+                    update.effective_chat.id,
+                    context.bot,
+                    asset_id,
+                    creds,
+                    passthrough_name,
+                    playback_id,
+                )
+            )
+
+            # Check if there's still a next episode
+            new_next = next_ep + 1
+            if new_next <= total_eps:
+                keyboard = [
+                    [InlineKeyboardButton(f"➕ إضافة الحلقة {new_next}", callback_data="tracked_add_ep")],
+                    [InlineKeyboardButton("🔙 رجوع للمسلسلات", callback_data="tracked_back_list")],
+                    [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
+                ]
+                # Update context for next ep
+                context.user_data["tracked_last_ep"] = next_ep
+                context.user_data["tracked_next_ep"] = new_next
+                next_ep_data = episodes_data[new_next - 1] if new_next <= len(episodes_data) else {}
+                context.user_data["tracked_next_ep_name"] = next_ep_data.get("name", f"الحلقة {new_next}")
+                extra = f"\n\n➡️ <b>الحلقة التالية:</b> {new_next} - {context.user_data['tracked_next_ep_name']}"
+            else:
+                keyboard = [
+                    [InlineKeyboardButton("🔙 رجوع للمسلسلات", callback_data="tracked_back_list")],
+                    [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
+                ]
+                extra = "\n\n✅ <b>اكتمل الموسم!</b>"
+
+            await status_msg.edit_text(
+                f"✅ <b>تم رفع الحلقة {next_ep} بنجاح!</b>\n\n"
+                f"📝 {passthrough_name}\n"
+                f"📁 القسم: {section_id}\n"
+                f"🆔 Playback ID: <code>{playback_id}</code>\n"
+                f"📊 التقدم: {next_ep}/{total_eps}"
+                f"{extra}",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.HTML,
+            )
+            return TRACKED_SERIES_DETAIL
+
+        else:
+            error_msg = response.json().get("error", {}).get("message", "خطأ غير معروف")
+            keyboard = [
+                [InlineKeyboardButton("🔄 إعادة المحاولة", callback_data="tracked_add_ep")],
+                [InlineKeyboardButton("🔙 رجوع", callback_data="tracked_back_list")],
+            ]
+            await status_msg.edit_text(
+                f"❌ <b>فشل رفع الحلقة {next_ep}</b>\n\n"
+                f"الخطأ: {error_msg}",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.HTML,
+            )
+            return TRACKED_SERIES_DETAIL
+
+    except Exception as e:
+        keyboard = [
+            [InlineKeyboardButton("🔄 إعادة المحاولة", callback_data="tracked_add_ep")],
+            [InlineKeyboardButton("🔙 رجوع", callback_data="tracked_back_list")],
+        ]
+        await status_msg.edit_text(
+            f"⚠️ <b>خطأ في رفع الحلقة {next_ep}</b>\n\n{str(e)}",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.HTML,
+        )
+        return TRACKED_SERIES_DETAIL
+
+
+async def tracked_cancel_ep_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle cancel during tracked episode link entry."""
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "tracked_cancel_ep":
+        tmdb_id = context.user_data.get("tracked_tmdb_id")
+        return await tracked_series_show_detail(update, context, tmdb_id)
+
+
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "❌ <b>تم إلغاء العملية</b>\n\n" "استخدم /start للبدء من جديد.",
@@ -2146,6 +2700,11 @@ def main():
     # Load sections from GitHub (or local file as fallback)
     print("Loading sections from GitHub...")
     sections = load_sections()
+    
+    # Load tracked series
+    print("Loading tracked series...")
+    tracked = load_tracked_series()
+    print(f"Tracked series: {len(tracked)} series loaded")
     
     print("Bot starting...")
     print(f"Cinema Plus: {len(sections.get('cinema_plus', {}))} sections loaded")
@@ -2242,6 +2801,18 @@ def main():
             ],
             SERIES_SHOW_PLAYBACK_IDS: [
                 CallbackQueryHandler(series_season_done_handler, pattern="^series_|^menu_back$"),
+            ],
+            # Tracked series states
+            TRACKED_SERIES_LIST: [
+                CallbackQueryHandler(tracked_series_list_callback, pattern="^tracked_"),
+                CallbackQueryHandler(main_menu_handler, pattern="^menu_"),
+            ],
+            TRACKED_SERIES_DETAIL: [
+                CallbackQueryHandler(tracked_series_detail_callback, pattern="^tracked_|^menu_"),
+            ],
+            TRACKED_SERIES_ADD_LINK: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, tracked_series_add_link),
+                CallbackQueryHandler(tracked_cancel_ep_callback, pattern="^tracked_cancel_ep$"),
             ],
         },
         fallbacks=[
