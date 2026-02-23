@@ -30,6 +30,9 @@ TMDB_BASE_URL = "https://api.themoviedb.org/3"
 CINEMA_PLUS_PASSWORD = "67146"
 SHOOF_PLAY_PASSWORD = "1460"
 
+# Admin user IDs - these users skip password authentication
+ADMIN_USER_IDS = [5529978863]
+
 # Path to sections JSON file (local cache)
 SECTIONS_FILE = "sections.json"
 
@@ -443,7 +446,10 @@ user_auth_cache = {}
     TRACKED_SERIES_LIST,
     TRACKED_SERIES_DETAIL,
     TRACKED_SERIES_ADD_LINK,
-) = range(24)
+    # Batch upload states
+    TRACKED_SERIES_BATCH_COLLECT,
+    TRACKED_SERIES_BATCH_CONFIRM,
+) = range(26)
 
 
 def is_user_authenticated(user_id: int, system: str) -> bool:
@@ -500,6 +506,11 @@ async def select_system(update: Update, context: ContextTypes.DEFAULT_TYPE):
     system = query.data.replace("system_", "")
     context.user_data["system"] = system
     user_id = update.effective_user.id
+
+    # Admin users skip password authentication
+    if user_id in ADMIN_USER_IDS:
+        authenticate_user(user_id, system)
+        return await show_main_menu(update, context, edit=True)
 
     if is_user_authenticated(user_id, system):
         return await show_main_menu(update, context, edit=True)
@@ -2405,6 +2416,7 @@ async def tracked_series_show_detail(update: Update, context: ContextTypes.DEFAU
             "<b>اختر إجراء:</b>"
         )
         keyboard.append([InlineKeyboardButton(f"➕ إضافة الحلقة {next_ep}", callback_data="tracked_add_ep")])
+        keyboard.append([InlineKeyboardButton(f"📤 إضافة حلقات دفعة واحدة", callback_data="tracked_batch_add")])
     else:
         # Season is complete - check if there's a next season
         series_data = tmdb_get_series(tmdb_id)
@@ -2429,6 +2441,9 @@ async def tracked_series_show_detail(update: Update, context: ContextTypes.DEFAU
         else:
             text += "<i>لا يوجد موسم جديد متاح حالياً.</i>\n\n"
 
+    # Show episodes list button (to see what's uploaded in Mux for this series)
+    if last_ep > 0:
+        keyboard.append([InlineKeyboardButton("📋 عرض الحلقات المرفوعة", callback_data="tracked_show_episodes")])
     keyboard.append([InlineKeyboardButton("🗑️ إزالة من التتبع", callback_data="tracked_remove")])
     keyboard.append([InlineKeyboardButton("🔙 رجوع للمسلسلات", callback_data="tracked_back_list")])
     keyboard.append([InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")])
@@ -2463,6 +2478,14 @@ async def tracked_series_detail_callback(update: Update, context: ContextTypes.D
             parse_mode=ParseMode.HTML,
         )
         return TRACKED_SERIES_LIST
+
+    if query.data == "tracked_show_episodes":
+        # Show uploaded episodes for this tracked series from Mux
+        return await tracked_series_show_uploaded_episodes(update, context)
+
+    if query.data == "tracked_batch_add":
+        # Start batch mode - collect links then upload all at once
+        return await tracked_series_start_batch(update, context)
 
     if query.data == "tracked_add_ep":
         # Find a section with free space and ask for the link
@@ -2669,6 +2692,381 @@ async def tracked_series_add_link(update: Update, context: ContextTypes.DEFAULT_
         return TRACKED_SERIES_DETAIL
 
 
+async def tracked_series_show_uploaded_episodes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show all uploaded episodes (from Mux) for a tracked series."""
+    query = update.callback_query
+    name = context.user_data.get("tracked_name")
+    tmdb_id = context.user_data.get("tracked_tmdb_id")
+    season_num = context.user_data.get("tracked_season")
+    last_ep = context.user_data.get("tracked_last_ep", 0)
+
+    system = "cinema_plus"
+    sections = get_sections_for_system(system)
+
+    await query.edit_message_text(
+        f"⏳ <b>جاري البحث عن حلقات {name}...</b>",
+        parse_mode=ParseMode.HTML,
+    )
+
+    # Search all sections for episodes matching this series
+    found_episodes = []
+    search_prefix = f"{name} - S{season_num:02d}E"
+
+    for section_id in sorted(sections.keys(), key=lambda x: int(x) if x.isdigit() else 0):
+        creds = sections[section_id]
+        try:
+            res = requests.get(
+                "https://api.mux.com/video/v1/assets",
+                auth=(creds["id"], creds["secret"]),
+                timeout=10,
+            )
+            assets = res.json().get("data", [])
+            for asset in assets:
+                passthrough = asset.get("passthrough", "")
+                if passthrough.startswith(search_prefix) or name in passthrough:
+                    playback_ids = asset.get("playback_ids", [])
+                    p_id = playback_ids[0]["id"] if playback_ids else "غير متوفر"
+                    status = asset.get("status", "غير معروف")
+                    status_emoji = "✅" if status == "ready" else "⏳" if status == "preparing" else "❌"
+                    found_episodes.append({
+                        "name": passthrough,
+                        "playback_id": p_id,
+                        "status": status_emoji,
+                        "section_id": section_id,
+                    })
+        except Exception:
+            pass
+
+    if not found_episodes:
+        keyboard = [
+            [InlineKeyboardButton("🔙 رجوع", callback_data=f"tracked_{tmdb_id}")],
+        ]
+        await query.edit_message_text(
+            f"📋 <b>{name} - الموسم {season_num}</b>\n\n"
+            "لم يتم العثور على حلقات مرفوعة في الأقسام.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.HTML,
+        )
+        return TRACKED_SERIES_DETAIL
+
+    text = f"📋 <b>{name} - الموسم {season_num}</b>\n"
+    text += f"📊 الحلقات المرفوعة: {len(found_episodes)}\n\n"
+
+    all_ids = []
+    for ep in found_episodes:
+        text += f"{ep['status']} <b>{ep['name']}</b>\n"
+        text += f"   📁 القسم: {ep['section_id']}\n"
+        text += f"   🆔 <code>{ep['playback_id']}</code>\n\n"
+        if ep['playback_id'] != "غير متوفر":
+            all_ids.append(ep['playback_id'])
+
+    if all_ids:
+        text += f"\n<b>نسخ سريع (جميع المعرفات):</b>\n<code>{chr(10).join(all_ids)}</code>"
+
+    keyboard = [
+        [InlineKeyboardButton("🔙 رجوع", callback_data=f"tracked_{tmdb_id}")],
+        [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
+    ]
+
+    await query.edit_message_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML,
+    )
+    return TRACKED_SERIES_DETAIL
+
+
+async def tracked_series_start_batch(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start batch mode - collect all episode links first, then upload all at once."""
+    query = update.callback_query
+
+    name = context.user_data.get("tracked_name")
+    tmdb_id = context.user_data.get("tracked_tmdb_id")
+    next_ep = context.user_data.get("tracked_next_ep")
+    season_num = context.user_data.get("tracked_season")
+    total_eps = context.user_data.get("tracked_total_eps")
+    episodes_data = context.user_data.get("tracked_episodes_data", [])
+
+    remaining = total_eps - (next_ep - 1)
+
+    # Initialize batch collection
+    context.user_data["batch_links"] = []
+    context.user_data["batch_start_ep"] = next_ep
+
+    keyboard = [
+        [InlineKeyboardButton("🚀 رفع الكل الآن", callback_data="batch_upload_now")],
+        [InlineKeyboardButton("❌ إلغاء", callback_data="batch_cancel")],
+    ]
+
+    await query.edit_message_text(
+        f"📤 <b>إضافة حلقات دفعة واحدة</b>\n\n"
+        f"📺 <b>{name} - الموسم {season_num}</b>\n"
+        f"📊 الحلقات المتبقية: {remaining} (من {next_ep} إلى {total_eps})\n\n"
+        f"<b>ارسل روابط الحلقات واحد تلو الآخر:</b>\n"
+        f"الرابط الأول = الحلقة {next_ep}\n"
+        f"الرابط الثاني = الحلقة {next_ep + 1}\n"
+        f"وهكذا...\n\n"
+        f"📝 <b>الروابط المجمعة:</b> 0\n\n"
+        f"<i>عند الانتهاء اضغط \"رفع الكل الآن\"</i>",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML,
+    )
+    return TRACKED_SERIES_BATCH_COLLECT
+
+
+async def tracked_series_batch_collect_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Collect a link in batch mode - instant response, no API calls."""
+    video_url = update.message.text.strip()
+
+    name = context.user_data.get("tracked_name")
+    season_num = context.user_data.get("tracked_season")
+    total_eps = context.user_data.get("tracked_total_eps")
+    batch_links = context.user_data.get("batch_links", [])
+    start_ep = context.user_data.get("batch_start_ep", 1)
+    episodes_data = context.user_data.get("tracked_episodes_data", [])
+
+    current_ep = start_ep + len(batch_links)
+
+    # Add the link to batch
+    batch_links.append(video_url)
+    context.user_data["batch_links"] = batch_links
+
+    next_ep_num = start_ep + len(batch_links)
+    remaining = total_eps - (next_ep_num - 1)
+
+    # Try to delete the link message for cleanliness
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
+    # Build summary
+    text = f"📤 <b>إضافة حلقات دفعة واحدة</b>\n\n"
+    text += f"📺 <b>{name} - الموسم {season_num}</b>\n\n"
+    text += f"📝 <b>الروابط المجمعة:</b> {len(batch_links)}\n"
+
+    for i, link in enumerate(batch_links):
+        ep_num = start_ep + i
+        ep_data = episodes_data[ep_num - 1] if ep_num <= len(episodes_data) else {}
+        ep_name = ep_data.get("name", f"الحلقة {ep_num}")
+        # Show short version of link
+        short_link = link[:40] + "..." if len(link) > 40 else link
+        text += f"  ✅ الحلقة {ep_num} ({ep_name}): {short_link}\n"
+
+    if remaining > 0 and next_ep_num <= total_eps:
+        next_ep_data = episodes_data[next_ep_num - 1] if next_ep_num <= len(episodes_data) else {}
+        next_ep_name = next_ep_data.get("name", f"الحلقة {next_ep_num}")
+        text += f"\n➡️ <b>الرابط التالي = الحلقة {next_ep_num}</b> ({next_ep_name})\n"
+        text += f"📊 المتبقي: {remaining} حلقة\n"
+    else:
+        text += f"\n✅ <b>تم تجميع جميع الحلقات المتبقية!</b>\n"
+
+    text += "\n<i>اضغط \"رفع الكل الآن\" للبدء بالرفع</i>"
+
+    keyboard = [
+        [InlineKeyboardButton(f"🚀 رفع الكل الآن ({len(batch_links)} حلقة)", callback_data="batch_upload_now")],
+        [InlineKeyboardButton("❌ إلغاء", callback_data="batch_cancel")],
+    ]
+
+    await update.message.reply_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML,
+    )
+    return TRACKED_SERIES_BATCH_COLLECT
+
+
+async def tracked_series_batch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle batch mode callbacks."""
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "batch_cancel":
+        context.user_data.pop("batch_links", None)
+        context.user_data.pop("batch_start_ep", None)
+        tmdb_id = context.user_data.get("tracked_tmdb_id")
+        return await tracked_series_show_detail(update, context, tmdb_id)
+
+    if query.data == "batch_upload_now":
+        return await tracked_series_batch_upload(update, context)
+
+
+async def tracked_series_batch_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Upload all collected batch links at once."""
+    query = update.callback_query
+    batch_links = context.user_data.get("batch_links", [])
+    start_ep = context.user_data.get("batch_start_ep", 1)
+    name = context.user_data.get("tracked_name")
+    tmdb_id = context.user_data.get("tracked_tmdb_id")
+    season_num = context.user_data.get("tracked_season")
+    total_eps = context.user_data.get("tracked_total_eps")
+    episodes_data = context.user_data.get("tracked_episodes_data", [])
+
+    if not batch_links:
+        await query.answer("لا توجد روابط لرفعها!", show_alert=True)
+        return TRACKED_SERIES_BATCH_COLLECT
+
+    system = "cinema_plus"
+    available = get_available_sections_with_space(system)
+    total_free = sum(s["free"] for s in available)
+
+    if total_free < len(batch_links):
+        keyboard = [
+            [InlineKeyboardButton("➕ إضافة قسم جديد", callback_data="menu_add_section")],
+            [InlineKeyboardButton("🔙 رجوع", callback_data="batch_cancel")],
+        ]
+        await query.edit_message_text(
+            f"⚠️ <b>لا توجد مساحة كافية!</b>\n\n"
+            f"تحتاج {len(batch_links)} مكان، المتاح: {total_free}\n"
+            f"الرجاء إضافة أقسام جديدة.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.HTML,
+        )
+        return TRACKED_SERIES_BATCH_COLLECT
+
+    # Start uploading
+    status_msg = await query.edit_message_text(
+        f"🚀 <b>جاري رفع {len(batch_links)} حلقة...</b>\n\n"
+        f"📺 {name} - الموسم {season_num}\n\n"
+        f"⏳ الرجاء الانتظار...",
+        parse_mode=ParseMode.HTML,
+    )
+
+    results = []
+    sec_idx = 0
+    sec_used = 0
+
+    for i, video_url in enumerate(batch_links):
+        ep_num = start_ep + i
+        ep_data = episodes_data[ep_num - 1] if ep_num <= len(episodes_data) else {}
+        ep_name = ep_data.get("name", f"الحلقة {ep_num}")
+        passthrough_name = f"{name} - S{season_num:02d}E{ep_num:02d} - {ep_name}"
+
+        # Find section with space
+        while sec_idx < len(available) and sec_used >= available[sec_idx]["free"]:
+            sec_idx += 1
+            sec_used = 0
+
+        if sec_idx >= len(available):
+            results.append((ep_num, "❌", "لا توجد مساحة", ""))
+            continue
+
+        section = available[sec_idx]
+        creds = section["creds"]
+        section_id = section["section_id"]
+
+        try:
+            response = requests.post(
+                "https://api.mux.com/video/v1/assets",
+                json={
+                    "input": [{"url": video_url}],
+                    "playback_policy": ["public"],
+                    "passthrough": passthrough_name,
+                },
+                auth=(creds["id"], creds["secret"]),
+                timeout=30,
+            )
+
+            if response.status_code == 201:
+                res_data = response.json()["data"]
+                asset_id = res_data["id"]
+                playback_ids = res_data.get("playback_ids", [])
+                playback_id = playback_ids[0]["id"] if playback_ids else "قيد الانتظار..."
+
+                results.append((ep_num, "✅", playback_id, section_id))
+                sec_used += 1
+
+                # Track in background
+                asyncio.create_task(
+                    track_asset_status(
+                        update.effective_chat.id,
+                        context.bot,
+                        asset_id,
+                        creds,
+                        passthrough_name,
+                        playback_id,
+                    )
+                )
+            else:
+                error_msg = response.json().get("error", {}).get("message", "خطأ")
+                results.append((ep_num, "❌", error_msg, section_id))
+
+        except Exception as e:
+            results.append((ep_num, "⚠️", str(e)[:50], ""))
+
+        # Update progress
+        try:
+            await status_msg.edit_text(
+                f"🚀 <b>جاري رفع {len(batch_links)} حلقة...</b>\n\n"
+                f"📺 {name} - الموسم {season_num}\n\n"
+                f"📊 التقدم: {i + 1}/{len(batch_links)}\n"
+                f"⏳ جاري رفع الحلقة {ep_num}...",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            pass
+
+    # Update tracked series with last successful episode
+    last_successful = start_ep - 1
+    for ep_num, status, pid, sid in results:
+        if status == "✅":
+            last_successful = ep_num
+
+    if last_successful >= start_ep:
+        poster_path = ""
+        tracked_entry = find_tracked_series(tmdb_id)
+        if tracked_entry:
+            poster_path = tracked_entry.get("poster_path", "")
+        upsert_tracked_series(
+            tmdb_id=tmdb_id,
+            name=name,
+            poster_path=poster_path,
+            season_num=season_num,
+            last_ep=last_successful,
+            total_eps=total_eps,
+        )
+
+    # Show results
+    text = f"📊 <b>نتائج الرفع - {name} الموسم {season_num}</b>\n\n"
+    all_ids = []
+    success_count = 0
+    for ep_num, status, pid, sid in results:
+        if status == "✅":
+            text += f"{status} الحلقة {ep_num}: <code>{pid}</code> (القسم {sid})\n"
+            if pid != "قيد الانتظار...":
+                all_ids.append(pid)
+            success_count += 1
+        else:
+            text += f"{status} الحلقة {ep_num}: {pid}\n"
+
+    text += f"\n📊 <b>النتيجة:</b> {success_count}/{len(batch_links)} حلقة تم رفعها بنجاح\n"
+
+    if all_ids:
+        text += f"\n<b>نسخ سريع:</b>\n<code>{chr(10).join(all_ids)}</code>"
+
+    keyboard = [
+        [InlineKeyboardButton("🔙 رجوع للمسلسلات", callback_data="tracked_back_list")],
+        [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
+    ]
+
+    # Check if there are more episodes
+    new_next = last_successful + 1
+    if new_next <= total_eps:
+        keyboard.insert(0, [InlineKeyboardButton(f"➕ متابعة من الحلقة {new_next}", callback_data=f"tracked_{tmdb_id}")])
+
+    await status_msg.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML,
+    )
+
+    # Clean up batch data
+    context.user_data.pop("batch_links", None)
+    context.user_data.pop("batch_start_ep", None)
+
+    return TRACKED_SERIES_DETAIL
+
+
 async def tracked_cancel_ep_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle cancel during tracked episode link entry."""
     query = update.callback_query
@@ -2813,6 +3211,13 @@ def main():
             TRACKED_SERIES_ADD_LINK: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, tracked_series_add_link),
                 CallbackQueryHandler(tracked_cancel_ep_callback, pattern="^tracked_cancel_ep$"),
+            ],
+            TRACKED_SERIES_BATCH_COLLECT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, tracked_series_batch_collect_link),
+                CallbackQueryHandler(tracked_series_batch_callback, pattern="^batch_"),
+            ],
+            TRACKED_SERIES_BATCH_CONFIRM: [
+                CallbackQueryHandler(tracked_series_batch_callback, pattern="^batch_"),
             ],
         },
         fallbacks=[
