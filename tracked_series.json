@@ -34,5 +34,14 @@
     "last_uploaded_episode": 17,
     "total_episodes": 30,
     "added_at": "2026-03-06T03:07:56.039492"
+  },
+  {
+    "tmdb_id": 312744,
+    "name": "قيصرية",
+    "poster_path": "",
+    "last_uploaded_season": 1,
+    "last_uploaded_episode": 10,
+    "total_episodes": 10,
+    "added_at": "2026-03-06T03:13:44.231342"
   }
 ]
