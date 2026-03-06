@@ -1802,10 +1802,10 @@ async def series_ask_all_episode_links(update: Update, context: ContextTypes.DEF
 
     text = (
         f"📺 <b>{series_name} - الموسم {season_num}</b>\n\n"
-        f"🎬 <b>عدد الحلقات:</b> {total_episodes}\n\n"
-        f"<b>📋 قائمة الحلقات:</b>\n{episode_list}\n"
-        f"<b>📤 أرسل جميع روابط الحلقات دفعة واحدة</b>\n"
-        f"<i>كل رابط في سطر منفصل، بالترتيب من الحلقة 1 إلى {total_episodes}</i>\n\n"
+        f"🎬 <b>عدد الحلقات الكلي:</b> {total_episodes}\n\n"
+        f"<b>📤 أرسل روابط الحلقات المتوفرة لديك</b>\n"
+        f"<i>كل رابط في سطر منفصل، بالترتيب من الحلقة 1</i>\n"
+        f"<i>يمكنك إرسال أي عدد من الروابط (ليس بالضرورة جميع الحلقات)</i>\n\n"
         f"<b>مثال:</b>\n"
         f"<code>https://link1.com/ep1\n"
         f"https://link2.com/ep2\n"
@@ -1854,21 +1854,8 @@ async def series_handle_episode_link(update: Update, context: ContextTypes.DEFAU
     total_episodes = context.user_data.get("series_total_episodes", 0)
     episodes = context.user_data.get("series_episodes", [])
 
-    # Validate number of links
-    if len(links) != total_episodes:
-        keyboard = [
-            [InlineKeyboardButton("🔄 إعادة المحاولة", callback_data="series_retry_batch")],
-            [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
-        ]
-        await update.message.reply_text(
-            f"⚠️ <b>عدد الروابط غير متطابق!</b>\n\n"
-            f"📊 عدد الروابط المرسلة: {len(links)}\n"
-            f"📊 عدد الحلقات المطلوبة: {total_episodes}\n\n"
-            f"<i>الرجاء إرسال {total_episodes} رابط، كل رابط في سطر منفصل.</i>",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode=ParseMode.HTML,
-        )
-        return SERIES_ENTER_EPISODE_LINK
+    # Use the number of links sent as the actual episode count
+    actual_episodes = len(links)
 
     try:
         await update.message.delete()
@@ -1877,7 +1864,7 @@ async def series_handle_episode_link(update: Update, context: ContextTypes.DEFAU
 
     # Start batch upload
     status_msg = await update.message.reply_text(
-        f"🚀 <b>جاري رفع {total_episodes} حلقة...</b>\n\n"
+        f"🚀 <b>جاري رفع {actual_episodes} حلقة...</b>\n\n"
         f"📺 {series_name} - الموسم {season_num}\n\n"
         f"⏳ الرجاء الانتظار...",
         parse_mode=ParseMode.HTML,
@@ -1957,9 +1944,9 @@ async def series_handle_episode_link(update: Update, context: ContextTypes.DEFAU
         # Update progress
         try:
             await status_msg.edit_text(
-                f"🚀 <b>جاري رفع {total_episodes} حلقة...</b>\n\n"
+                f"🚀 <b>جاري رفع {actual_episodes} حلقة...</b>\n\n"
                 f"📺 {series_name} - الموسم {season_num}\n\n"
-                f"📊 التقدم: {i + 1}/{total_episodes}\n"
+                f"📊 التقدم: {i + 1}/{actual_episodes}\n"
                 f"⏳ جاري رفع الحلقة {ep_num}...",
                 parse_mode=ParseMode.HTML,
             )
@@ -2020,7 +2007,7 @@ async def series_handle_episode_link(update: Update, context: ContextTypes.DEFAU
         else:
             text += f"{status} الحلقة {ep_num}: {pid}\n"
 
-    text += f"\n📊 <b>النتيجة:</b> {success_count}/{total_episodes} حلقة تم رفعها بنجاح\n"
+    text += f"\n📊 <b>النتيجة:</b> {success_count}/{actual_episodes} حلقة تم رفعها بنجاح\n"
 
     if all_ids:
         text += f"\n<b>نسخ سريع (جميع المعرفات):</b>\n<code>{chr(10).join(all_ids)}</code>"
@@ -2852,12 +2839,12 @@ async def tracked_series_start_batch(update: Update, context: ContextTypes.DEFAU
     ]
 
     await query.edit_message_text(
-        f"📤 <b>إضافة حلقات دفعة واحدة</b>\n\n"
+        f"📤 <b>إضافة حلقات</b>\n\n"
         f"📺 <b>{name} - الموسم {season_num}</b>\n"
         f"📊 الحلقات المتبقية: {remaining} (من {next_ep} إلى {total_eps})\n\n"
-        f"<b>📋 قائمة الحلقات:</b>\n{episode_list}\n"
-        f"<b>📤 أرسل جميع روابط الحلقات دفعة واحدة</b>\n"
-        f"<i>كل رابط في سطر منفصل، بالترتيب من الحلقة {next_ep} إلى {total_eps}</i>\n\n"
+        f"<b>📤 أرسل روابط الحلقات المتوفرة لديك</b>\n"
+        f"<i>كل رابط في سطر منفصل، بالترتيب من الحلقة {next_ep}</i>\n"
+        f"<i>يمكنك إرسال أي عدد من الروابط (ليس بالضرورة جميع الحلقات)</i>\n\n"
         f"<b>مثال:</b>\n"
         f"<code>https://link1.com/ep{next_ep}\n"
         f"https://link2.com/ep{next_ep + 1}\n"
@@ -2882,25 +2869,7 @@ async def tracked_series_batch_collect_link(update: Update, context: ContextType
     episodes_data = context.user_data.get("tracked_episodes_data", [])
     tmdb_id = context.user_data.get("tracked_tmdb_id")
 
-    remaining = total_eps - (start_ep - 1)
-
-    # Validate number of links
-    if len(links) != remaining:
-        keyboard = [
-            [InlineKeyboardButton("🔄 إعادة المحاولة", callback_data="tracked_batch_add")],
-            [InlineKeyboardButton("🔙 رجوع", callback_data="batch_cancel")],
-        ]
-        await update.message.reply_text(
-            f"⚠️ <b>عدد الروابط غير متطابق!</b>\n\n"
-            f"📊 عدد الروابط المرسلة: {len(links)}\n"
-            f"📊 عدد الحلقات المطلوبة: {remaining}\n\n"
-            f"<i>الرجاء إرسال {remaining} رابط، كل رابط في سطر منفصل.</i>",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode=ParseMode.HTML,
-        )
-        return TRACKED_SERIES_BATCH_COLLECT
-
-    # Store links and proceed to upload
+    # Store links and proceed to upload (accept any number of links)
     context.user_data["batch_links"] = links
     return await tracked_series_batch_upload(update, context)
 
