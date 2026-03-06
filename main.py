@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import asyncio
 import base64
@@ -1760,7 +1761,7 @@ async def series_select_season(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def series_confirm_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle plan confirmation - start asking for episode links."""
+    """Handle plan confirmation - start asking for ALL episode links at once."""
     query = update.callback_query
     await query.answer()
 
@@ -1774,59 +1775,41 @@ async def series_confirm_plan(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Initialize episode tracking
         context.user_data["series_current_ep_index"] = 0
         context.user_data["series_current_plan_index"] = 0
-        context.user_data["series_uploaded_playback_ids"] = []  # list of (ep_num, playback_id)
+        context.user_data["series_uploaded_playback_ids"] = []  # list of (ep_num, playback_id, name)
+        context.user_data["series_batch_links"] = []  # For collecting all links
 
-        return await series_ask_next_episode(update, context, edit=True)
+        return await series_ask_all_episode_links(update, context, edit=True)
 
 
-async def series_ask_next_episode(update: Update, context: ContextTypes.DEFAULT_TYPE, edit: bool = True):
-    """Ask the user for the next episode link."""
-    upload_plan = context.user_data.get("series_upload_plan", [])
-    plan_index = context.user_data.get("series_current_plan_index", 0)
-    ep_index = context.user_data.get("series_current_ep_index", 0)
+async def series_ask_all_episode_links(update: Update, context: ContextTypes.DEFAULT_TYPE, edit: bool = True):
+    """Ask the user for ALL episode links at once."""
     series_name = context.user_data.get("series_name")
     season_num = context.user_data.get("series_current_season")
     total_episodes = context.user_data.get("series_total_episodes", 0)
     episodes = context.user_data.get("series_episodes", [])
 
-    # Calculate overall episode number
-    overall_ep = ep_index + 1
-
-    if overall_ep > total_episodes:
-        # All episodes done
-        return await series_season_complete(update, context, edit=edit)
-
-    # Find current section from plan
-    current_plan = None
-    ep_count_so_far = 0
-    for i, plan in enumerate(upload_plan):
-        if ep_count_so_far + len(plan["episodes"]) >= overall_ep:
-            current_plan = plan
-            context.user_data["series_current_plan_index"] = i
-            break
-        ep_count_so_far += len(plan["episodes"])
-
-    if not current_plan:
-        return await series_season_complete(update, context, edit=edit)
-
-    section_id = current_plan["section_id"]
-
-    # Get episode name from TMDB data
-    ep_data = episodes[ep_index] if ep_index < len(episodes) else {}
-    ep_name = ep_data.get("name", f"الحلقة {overall_ep}")
-    ep_overview = ep_data.get("overview", "")
-
     keyboard = [
-        [InlineKeyboardButton("⏸️ إيقاف مؤقت والإكمال لاحقاً", callback_data="series_pause")],
+        [InlineKeyboardButton("🔙 رجوع للمواسم", callback_data="series_back_to_seasons")],
         [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
     ]
 
+    # Build episode list
+    episode_list = ""
+    for i in range(total_episodes):
+        ep_data = episodes[i] if i < len(episodes) else {}
+        ep_name = ep_data.get("name", f"الحلقة {i+1}")
+        episode_list += f"  {i+1}. {ep_name}\n"
+
     text = (
-        f"📺 <b>{series_name} - الموسم {season_num}</b>\n"
-        f"📁 <b>القسم الحالي:</b> {section_id}\n\n"
-        f"🎬 <b>الحلقة {overall_ep} من {total_episodes}</b>\n"
-        f"📝 <b>عنوان الحلقة:</b> {ep_name}\n\n"
-        f"<b>أرسل رابط الحلقة {overall_ep}:</b>"
+        f"📺 <b>{series_name} - الموسم {season_num}</b>\n\n"
+        f"🎬 <b>عدد الحلقات:</b> {total_episodes}\n\n"
+        f"<b>📋 قائمة الحلقات:</b>\n{episode_list}\n"
+        f"<b>📤 أرسل جميع روابط الحلقات دفعة واحدة</b>\n"
+        f"<i>كل رابط في سطر منفصل، بالترتيب من الحلقة 1 إلى {total_episodes}</i>\n\n"
+        f"<b>مثال:</b>\n"
+        f"<code>https://link1.com/ep1\n"
+        f"https://link2.com/ep2\n"
+        f"https://link3.com/ep3</code>"
     )
 
     if edit:
@@ -1853,168 +1836,221 @@ async def series_ask_next_episode(update: Update, context: ContextTypes.DEFAULT_
     return SERIES_ENTER_EPISODE_LINK
 
 
+async def series_ask_next_episode(update: Update, context: ContextTypes.DEFAULT_TYPE, edit: bool = True):
+    """Redirect to batch mode - kept for compatibility."""
+    return await series_ask_all_episode_links(update, context, edit)
+
+
 async def series_handle_episode_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle receiving an episode link - upload to Mux."""
-    video_url = update.message.text.strip()
+    """Handle receiving ALL episode links at once - upload to Mux."""
+    message_text = update.message.text.strip()
+    
+    # Parse all links (split by newlines)
+    links = [link.strip() for link in message_text.split('\n') if link.strip()]
+    
     upload_plan = context.user_data.get("series_upload_plan", [])
-    plan_index = context.user_data.get("series_current_plan_index", 0)
-    ep_index = context.user_data.get("series_current_ep_index", 0)
     series_name = context.user_data.get("series_name")
     season_num = context.user_data.get("series_current_season")
     total_episodes = context.user_data.get("series_total_episodes", 0)
     episodes = context.user_data.get("series_episodes", [])
 
-    overall_ep = ep_index + 1
-    current_plan = upload_plan[plan_index]
-    creds = current_plan["creds"]
-    section_id = current_plan["section_id"]
-
-    # Get episode name
-    ep_data = episodes[ep_index] if ep_index < len(episodes) else {}
-    ep_name = ep_data.get("name", f"الحلقة {overall_ep}")
-
-    # Build passthrough name: "SeriesName - S01E01 - EpisodeName"
-    passthrough_name = f"{series_name} - S{season_num:02d}E{overall_ep:02d} - {ep_name}"
+    # Validate number of links
+    if len(links) != total_episodes:
+        keyboard = [
+            [InlineKeyboardButton("🔄 إعادة المحاولة", callback_data="series_retry_batch")],
+            [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
+        ]
+        await update.message.reply_text(
+            f"⚠️ <b>عدد الروابط غير متطابق!</b>\n\n"
+            f"📊 عدد الروابط المرسلة: {len(links)}\n"
+            f"📊 عدد الحلقات المطلوبة: {total_episodes}\n\n"
+            f"<i>الرجاء إرسال {total_episodes} رابط، كل رابط في سطر منفصل.</i>",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.HTML,
+        )
+        return SERIES_ENTER_EPISODE_LINK
 
     try:
         await update.message.delete()
     except Exception:
         pass
 
+    # Start batch upload
     status_msg = await update.message.reply_text(
-        f"⏳ <b>جاري رفع الحلقة {overall_ep} من {total_episodes}...</b>\n\n"
-        f"📝 {passthrough_name}",
+        f"🚀 <b>جاري رفع {total_episodes} حلقة...</b>\n\n"
+        f"📺 {series_name} - الموسم {season_num}\n\n"
+        f"⏳ الرجاء الانتظار...",
         parse_mode=ParseMode.HTML,
     )
 
-    try:
-        response = requests.post(
-            "https://api.mux.com/video/v1/assets",
-            json={
-                "input": [{"url": video_url}],
-                "playback_policy": ["public"],
-                "passthrough": passthrough_name,
-            },
-            auth=(creds["id"], creds["secret"]),
-            timeout=30,
-        )
+    results = []
+    sec_idx = 0
+    sec_used = 0
+    available = []
+    
+    # Flatten upload plan to get available sections
+    for plan in upload_plan:
+        available.append({
+            "section_id": plan["section_id"],
+            "creds": plan["creds"],
+            "free": len(plan["episodes"]),
+        })
 
-        if response.status_code == 201:
-            res_data = response.json()["data"]
-            asset_id = res_data["id"]
-            playback_ids = res_data.get("playback_ids", [])
-            playback_id = playback_ids[0]["id"] if playback_ids else "قيد الانتظار..."
+    for i, video_url in enumerate(links):
+        ep_num = i + 1
+        ep_data = episodes[i] if i < len(episodes) else {}
+        ep_name = ep_data.get("name", f"الحلقة {ep_num}")
+        passthrough_name = f"{series_name} - S{season_num:02d}E{ep_num:02d} - {ep_name}"
 
-            # Store playback ID
-            uploaded = context.user_data.get("series_uploaded_playback_ids", [])
-            uploaded.append((overall_ep, playback_id, passthrough_name))
-            context.user_data["series_uploaded_playback_ids"] = uploaded
+        # Find section with space
+        while sec_idx < len(available) and sec_used >= available[sec_idx]["free"]:
+            sec_idx += 1
+            sec_used = 0
 
-            # Also store in the season playback IDs
-            all_pids = context.user_data.get("series_all_playback_ids", {})
-            season_key = str(season_num)
-            if season_key not in all_pids:
-                all_pids[season_key] = {}
-            all_pids[season_key][str(overall_ep)] = playback_id
-            context.user_data["series_all_playback_ids"] = all_pids
+        if sec_idx >= len(available):
+            results.append((ep_num, "❌", "لا توجد مساحة", "", passthrough_name))
+            continue
 
-            # Track asset status in background
-            asyncio.create_task(
-                track_asset_status(
-                    update.effective_chat.id,
-                    context.bot,
-                    asset_id,
-                    creds,
-                    passthrough_name,
-                    playback_id,
+        section = available[sec_idx]
+        creds = section["creds"]
+        section_id = section["section_id"]
+
+        try:
+            response = requests.post(
+                "https://api.mux.com/video/v1/assets",
+                json={
+                    "input": [{"url": video_url}],
+                    "playback_policy": ["public"],
+                    "passthrough": passthrough_name,
+                },
+                auth=(creds["id"], creds["secret"]),
+                timeout=30,
+            )
+
+            if response.status_code == 201:
+                res_data = response.json()["data"]
+                asset_id = res_data["id"]
+                playback_ids = res_data.get("playback_ids", [])
+                playback_id = playback_ids[0]["id"] if playback_ids else "قيد الانتظار..."
+
+                results.append((ep_num, "✅", playback_id, section_id, passthrough_name))
+                sec_used += 1
+
+                # Track in background
+                asyncio.create_task(
+                    track_asset_status(
+                        update.effective_chat.id,
+                        context.bot,
+                        asset_id,
+                        creds,
+                        passthrough_name,
+                        playback_id,
+                    )
                 )
-            )
+            else:
+                error_msg = response.json().get("error", {}).get("message", "خطأ")
+                results.append((ep_num, "❌", error_msg, section_id, passthrough_name))
 
+        except Exception as e:
+            results.append((ep_num, "⚠️", str(e)[:50], "", passthrough_name))
+
+        # Update progress
+        try:
             await status_msg.edit_text(
-                f"✅ <b>تم رفع الحلقة {overall_ep} بنجاح!</b>\n\n"
-                f"📝 {passthrough_name}\n"
-                f"📁 القسم: {section_id}\n"
-                f"🆔 Playback ID: <code>{playback_id}</code>\n\n"
-                f"📊 التقدم: {overall_ep}/{total_episodes}",
+                f"🚀 <b>جاري رفع {total_episodes} حلقة...</b>\n\n"
+                f"📺 {series_name} - الموسم {season_num}\n\n"
+                f"📊 التقدم: {i + 1}/{total_episodes}\n"
+                f"⏳ جاري رفع الحلقة {ep_num}...",
                 parse_mode=ParseMode.HTML,
             )
+        except Exception:
+            pass
 
-            # Update tracked series in persistent storage
-            tmdb_id = context.user_data.get("series_tmdb_id")
-            poster_path = ""
-            # Try to get poster from TMDB data
-            series_seasons = context.user_data.get("series_seasons", [])
-            for s in series_seasons:
-                if s.get("poster_path"):
-                    poster_path = s["poster_path"]
-                    break
-            upsert_tracked_series(
-                tmdb_id=tmdb_id,
-                name=series_name,
-                poster_path=poster_path,
-                season_num=season_num,
-                last_ep=overall_ep,
-                total_eps=total_episodes,
-            )
-
-            # Move to next episode
-            context.user_data["series_current_ep_index"] = ep_index + 1
-
-            # Ask for next episode
-            return await series_ask_next_episode(update, context, edit=False)
-
+    # Store results and update tracked series
+    uploaded = []
+    all_pids = context.user_data.get("series_all_playback_ids", {})
+    season_key = str(season_num)
+    if season_key not in all_pids:
+        all_pids[season_key] = {}
+    
+    last_successful = 0
+    for ep_num, status, pid, sid, name in results:
+        if status == "✅":
+            uploaded.append((ep_num, pid, name))
+            all_pids[season_key][str(ep_num)] = pid
+            last_successful = ep_num
         else:
-            error_msg = response.json().get("error", {}).get("message", "خطأ غير معروف")
-            keyboard = [
-                [InlineKeyboardButton("🔄 إعادة المحاولة", callback_data="series_retry_ep")],
-                [InlineKeyboardButton("⏭️ تخطي هذه الحلقة", callback_data="series_skip_ep")],
-                [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
-            ]
-            await status_msg.edit_text(
-                f"❌ <b>فشل رفع الحلقة {overall_ep}</b>\n\n"
-                f"الخطأ: {error_msg}\n\n"
-                "اختر إجراء:",
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode=ParseMode.HTML,
-            )
-            return SERIES_ENTER_EPISODE_LINK
+            uploaded.append((ep_num, "تم_التخطي", name))
+    
+    context.user_data["series_uploaded_playback_ids"] = uploaded
+    context.user_data["series_all_playback_ids"] = all_pids
 
-    except Exception as e:
-        keyboard = [
-            [InlineKeyboardButton("🔄 إعادة المحاولة", callback_data="series_retry_ep")],
-            [InlineKeyboardButton("⏭️ تخطي هذه الحلقة", callback_data="series_skip_ep")],
-            [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
-        ]
-        await status_msg.edit_text(
-            f"⚠️ <b>خطأ في رفع الحلقة {overall_ep}</b>\n\n{str(e)}",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode=ParseMode.HTML,
+    # Update tracked series in persistent storage
+    if last_successful > 0:
+        tmdb_id = context.user_data.get("series_tmdb_id")
+        poster_path = ""
+        series_seasons = context.user_data.get("series_seasons", [])
+        for s in series_seasons:
+            if s.get("poster_path"):
+                poster_path = s["poster_path"]
+                break
+        upsert_tracked_series(
+            tmdb_id=tmdb_id,
+            name=series_name,
+            poster_path=poster_path,
+            season_num=season_num,
+            last_ep=last_successful,
+            total_eps=total_episodes,
         )
-        return SERIES_ENTER_EPISODE_LINK
+
+    # Show results - sorted from episode 1 downward
+    text = f"📊 <b>نتائج الرفع - {series_name} الموسم {season_num}</b>\n\n"
+    all_ids = []
+    success_count = 0
+    
+    # Sort results by episode number (1 to last)
+    sorted_results = sorted(results, key=lambda x: x[0])
+    
+    for ep_num, status, pid, sid, name in sorted_results:
+        if status == "✅":
+            text += f"{status} الحلقة {ep_num}: <code>{pid}</code> (القسم {sid})\n"
+            if pid != "قيد الانتظار...":
+                all_ids.append(pid)
+            success_count += 1
+        else:
+            text += f"{status} الحلقة {ep_num}: {pid}\n"
+
+    text += f"\n📊 <b>النتيجة:</b> {success_count}/{total_episodes} حلقة تم رفعها بنجاح\n"
+
+    if all_ids:
+        text += f"\n<b>نسخ سريع (جميع المعرفات):</b>\n<code>{chr(10).join(all_ids)}</code>"
+
+    keyboard = [
+        [InlineKeyboardButton("📋 عرض معرفات التشغيل", callback_data="series_show_ids")],
+        [InlineKeyboardButton("🔙 رجوع للمواسم", callback_data="series_back_to_seasons")],
+        [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
+    ]
+
+    await status_msg.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML,
+    )
+
+    return SERIES_SEASON_DONE
 
 
 async def series_episode_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle callbacks during episode upload (retry, skip, pause)."""
+    """Handle callbacks during episode upload (retry, batch)."""
     query = update.callback_query
     await query.answer()
 
     if query.data == "menu_back":
         return await show_main_menu(update, context, edit=True)
 
-    if query.data == "series_retry_ep":
-        # Ask for the same episode again
-        return await series_ask_next_episode(update, context, edit=True)
-
-    if query.data == "series_skip_ep":
-        # Skip current episode
-        ep_index = context.user_data.get("series_current_ep_index", 0)
-        overall_ep = ep_index + 1
-        # Store a placeholder
-        uploaded = context.user_data.get("series_uploaded_playback_ids", [])
-        uploaded.append((overall_ep, "تم_التخطي", "تم التخطي"))
-        context.user_data["series_uploaded_playback_ids"] = uploaded
-        context.user_data["series_current_ep_index"] = ep_index + 1
-        return await series_ask_next_episode(update, context, edit=True)
+    if query.data == "series_retry_batch":
+        # Ask for all episode links again
+        return await series_ask_all_episode_links(update, context, edit=True)
 
     if query.data == "series_pause":
         return await series_pause(update, context)
@@ -2749,6 +2785,17 @@ async def tracked_series_show_uploaded_episodes(update: Update, context: Context
         )
         return TRACKED_SERIES_DETAIL
 
+    # Extract episode number from passthrough name and sort
+    def extract_ep_num(ep):
+        # Try to extract episode number from "SeriesName - S01E05 - ..."
+        match = re.search(r'S\d+E(\d+)', ep['name'])
+        if match:
+            return int(match.group(1))
+        return 0
+    
+    # Sort episodes by episode number (1 to last)
+    found_episodes.sort(key=extract_ep_num)
+
     text = f"📋 <b>{name} - الموسم {season_num}</b>\n"
     text += f"📊 الحلقات المرفوعة: {len(found_episodes)}\n\n"
 
@@ -2777,7 +2824,7 @@ async def tracked_series_show_uploaded_episodes(update: Update, context: Context
 
 
 async def tracked_series_start_batch(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start batch mode - collect all episode links first, then upload all at once."""
+    """Start batch mode - ask for all episode links at once."""
     query = update.callback_query
 
     name = context.user_data.get("tracked_name")
@@ -2793,8 +2840,14 @@ async def tracked_series_start_batch(update: Update, context: ContextTypes.DEFAU
     context.user_data["batch_links"] = []
     context.user_data["batch_start_ep"] = next_ep
 
+    # Build episode list
+    episode_list = ""
+    for i in range(next_ep - 1, total_eps):
+        ep_data = episodes_data[i] if i < len(episodes_data) else {}
+        ep_name = ep_data.get("name", f"الحلقة {i+1}")
+        episode_list += f"  {i+1}. {ep_name}\n"
+
     keyboard = [
-        [InlineKeyboardButton("🚀 رفع الكل الآن", callback_data="batch_upload_now")],
         [InlineKeyboardButton("❌ إلغاء", callback_data="batch_cancel")],
     ]
 
@@ -2802,12 +2855,13 @@ async def tracked_series_start_batch(update: Update, context: ContextTypes.DEFAU
         f"📤 <b>إضافة حلقات دفعة واحدة</b>\n\n"
         f"📺 <b>{name} - الموسم {season_num}</b>\n"
         f"📊 الحلقات المتبقية: {remaining} (من {next_ep} إلى {total_eps})\n\n"
-        f"<b>ارسل روابط الحلقات واحد تلو الآخر:</b>\n"
-        f"الرابط الأول = الحلقة {next_ep}\n"
-        f"الرابط الثاني = الحلقة {next_ep + 1}\n"
-        f"وهكذا...\n\n"
-        f"📝 <b>الروابط المجمعة:</b> 0\n\n"
-        f"<i>عند الانتهاء اضغط \"رفع الكل الآن\"</i>",
+        f"<b>📋 قائمة الحلقات:</b>\n{episode_list}\n"
+        f"<b>📤 أرسل جميع روابط الحلقات دفعة واحدة</b>\n"
+        f"<i>كل رابط في سطر منفصل، بالترتيب من الحلقة {next_ep} إلى {total_eps}</i>\n\n"
+        f"<b>مثال:</b>\n"
+        f"<code>https://link1.com/ep{next_ep}\n"
+        f"https://link2.com/ep{next_ep + 1}\n"
+        f"...</code>",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.HTML,
     )
@@ -2815,7 +2869,45 @@ async def tracked_series_start_batch(update: Update, context: ContextTypes.DEFAU
 
 
 async def tracked_series_batch_collect_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Collect a link in batch mode - instant response, no API calls."""
+    """Handle receiving ALL episode links at once for tracked series."""
+    message_text = update.message.text.strip()
+    
+    # Parse all links (split by newlines)
+    links = [link.strip() for link in message_text.split('\n') if link.strip()]
+
+    name = context.user_data.get("tracked_name")
+    season_num = context.user_data.get("tracked_season")
+    total_eps = context.user_data.get("tracked_total_eps")
+    start_ep = context.user_data.get("batch_start_ep", 1)
+    episodes_data = context.user_data.get("tracked_episodes_data", [])
+    tmdb_id = context.user_data.get("tracked_tmdb_id")
+
+    remaining = total_eps - (start_ep - 1)
+
+    # Validate number of links
+    if len(links) != remaining:
+        keyboard = [
+            [InlineKeyboardButton("🔄 إعادة المحاولة", callback_data="tracked_batch_add")],
+            [InlineKeyboardButton("🔙 رجوع", callback_data="batch_cancel")],
+        ]
+        await update.message.reply_text(
+            f"⚠️ <b>عدد الروابط غير متطابق!</b>\n\n"
+            f"📊 عدد الروابط المرسلة: {len(links)}\n"
+            f"📊 عدد الحلقات المطلوبة: {remaining}\n\n"
+            f"<i>الرجاء إرسال {remaining} رابط، كل رابط في سطر منفصل.</i>",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.HTML,
+        )
+        return TRACKED_SERIES_BATCH_COLLECT
+
+    # Store links and proceed to upload
+    context.user_data["batch_links"] = links
+    return await tracked_series_batch_upload(update, context)
+
+
+# Legacy function - kept for compatibility but redirects to new flow
+async def _tracked_series_batch_collect_link_old(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Old single-link collection - now unused."""
     video_url = update.message.text.strip()
 
     name = context.user_data.get("tracked_name")
@@ -2893,7 +2985,6 @@ async def tracked_series_batch_callback(update: Update, context: ContextTypes.DE
 
 async def tracked_series_batch_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Upload all collected batch links at once."""
-    query = update.callback_query
     batch_links = context.user_data.get("batch_links", [])
     start_ep = context.user_data.get("batch_start_ep", 1)
     name = context.user_data.get("tracked_name")
@@ -2902,8 +2993,16 @@ async def tracked_series_batch_upload(update: Update, context: ContextTypes.DEFA
     total_eps = context.user_data.get("tracked_total_eps")
     episodes_data = context.user_data.get("tracked_episodes_data", [])
 
+    # Determine if this is from callback or message
+    if update.callback_query:
+        query = update.callback_query
+        is_callback = True
+    else:
+        is_callback = False
+
     if not batch_links:
-        await query.answer("لا توجد روابط لرفعها!", show_alert=True)
+        if is_callback:
+            await query.answer("لا توجد روابط لرفعها!", show_alert=True)
         return TRACKED_SERIES_BATCH_COLLECT
 
     system = "cinema_plus"
@@ -2915,22 +3014,34 @@ async def tracked_series_batch_upload(update: Update, context: ContextTypes.DEFA
             [InlineKeyboardButton("➕ إضافة قسم جديد", callback_data="menu_add_section")],
             [InlineKeyboardButton("🔙 رجوع", callback_data="batch_cancel")],
         ]
-        await query.edit_message_text(
+        text = (
             f"⚠️ <b>لا توجد مساحة كافية!</b>\n\n"
             f"تحتاج {len(batch_links)} مكان، المتاح: {total_free}\n"
-            f"الرجاء إضافة أقسام جديدة.",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode=ParseMode.HTML,
+            f"الرجاء إضافة أقسام جديدة."
         )
+        if is_callback:
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
+        else:
+            await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
         return TRACKED_SERIES_BATCH_COLLECT
 
+    # Try to delete the link message for cleanliness
+    if not is_callback:
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+
     # Start uploading
-    status_msg = await query.edit_message_text(
+    upload_text = (
         f"🚀 <b>جاري رفع {len(batch_links)} حلقة...</b>\n\n"
         f"📺 {name} - الموسم {season_num}\n\n"
-        f"⏳ الرجاء الانتظار...",
-        parse_mode=ParseMode.HTML,
+        f"⏳ الرجاء الانتظار..."
     )
+    if is_callback:
+        status_msg = await query.edit_message_text(upload_text, parse_mode=ParseMode.HTML)
+    else:
+        status_msg = await update.message.reply_text(upload_text, parse_mode=ParseMode.HTML)
 
     results = []
     sec_idx = 0
@@ -3026,11 +3137,15 @@ async def tracked_series_batch_upload(update: Update, context: ContextTypes.DEFA
             total_eps=total_eps,
         )
 
-    # Show results
+    # Show results - sorted from episode 1 downward
     text = f"📊 <b>نتائج الرفع - {name} الموسم {season_num}</b>\n\n"
     all_ids = []
     success_count = 0
-    for ep_num, status, pid, sid in results:
+    
+    # Sort results by episode number
+    sorted_results = sorted(results, key=lambda x: x[0])
+    
+    for ep_num, status, pid, sid in sorted_results:
         if status == "✅":
             text += f"{status} الحلقة {ep_num}: <code>{pid}</code> (القسم {sid})\n"
             if pid != "قيد الانتظار...":
@@ -3042,7 +3157,7 @@ async def tracked_series_batch_upload(update: Update, context: ContextTypes.DEFA
     text += f"\n📊 <b>النتيجة:</b> {success_count}/{len(batch_links)} حلقة تم رفعها بنجاح\n"
 
     if all_ids:
-        text += f"\n<b>نسخ سريع:</b>\n<code>{chr(10).join(all_ids)}</code>"
+        text += f"\n<b>نسخ سريع (جميع المعرفات):</b>\n<code>{chr(10).join(all_ids)}</code>"
 
     keyboard = [
         [InlineKeyboardButton("🔙 رجوع للمسلسلات", callback_data="tracked_back_list")],
