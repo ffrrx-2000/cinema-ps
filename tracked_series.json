@@ -43,5 +43,14 @@
     "last_uploaded_episode": 10,
     "total_episodes": 10,
     "added_at": "2026-03-06T03:13:44.231342"
+  },
+  {
+    "tmdb_id": 298629,
+    "name": "الخليفة",
+    "poster_path": "/mUfSxkLtS1Hu3ZSnYRkZiH8FR4P.jpg",
+    "last_uploaded_season": 1,
+    "last_uploaded_episode": 22,
+    "total_episodes": 25,
+    "added_at": "2026-03-06T03:27:55.779473"
   }
 ]
