@@ -25,5 +25,14 @@
     "last_uploaded_episode": 15,
     "total_episodes": 15,
     "added_at": "2026-03-06T02:14:58.622990"
+  },
+  {
+    "tmdb_id": 304620,
+    "name": "مولانا",
+    "poster_path": "/e83a9j1zcl0cszqRwO0ZhRPt2a4.jpg",
+    "last_uploaded_season": 1,
+    "last_uploaded_episode": 17,
+    "total_episodes": 30,
+    "added_at": "2026-03-06T03:07:56.039492"
   }
 ]
