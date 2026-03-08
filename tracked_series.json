@@ -52,5 +52,14 @@
     "last_uploaded_episode": 22,
     "total_episodes": 25,
     "added_at": "2026-03-06T03:27:55.779473"
+  },
+  {
+    "tmdb_id": 1398,
+    "name": "آل سوبرانو",
+    "poster_path": "/46zBNFiXPoh3I0YEDPZkBLO0bWV.jpg",
+    "last_uploaded_season": 1,
+    "last_uploaded_episode": 13,
+    "total_episodes": 13,
+    "added_at": "2026-03-08T07:23:53.829464"
   }
 ]
