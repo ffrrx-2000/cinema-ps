@@ -7,5 +7,14 @@
     "last_uploaded_episode": 6,
     "total_episodes": 10,
     "added_at": "2026-03-10T06:14:21.695630"
+  },
+  {
+    "tmdb_id": 66433,
+    "name": "أحباء القمر",
+    "poster_path": "/5ZIeIH5TtqL267LEQ4iQXPwQrgT.jpg",
+    "last_uploaded_season": 1,
+    "last_uploaded_episode": 20,
+    "total_episodes": 20,
+    "added_at": "2026-03-10T08:47:41.449877"
   }
 ]
