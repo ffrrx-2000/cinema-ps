@@ -25,5 +25,14 @@
     "last_uploaded_episode": 8,
     "total_episodes": 8,
     "added_at": "2026-03-10T10:38:09.063385"
+  },
+  {
+    "tmdb_id": 122543,
+    "name": "المداح",
+    "poster_path": "/d96d3FYAXjE5cOZp0zTHyHuFg52.jpg",
+    "last_uploaded_season": 1,
+    "last_uploaded_episode": 30,
+    "total_episodes": 30,
+    "added_at": "2026-03-11T10:57:27.596603"
   }
 ]
