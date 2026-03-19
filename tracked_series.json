@@ -7,5 +7,14 @@
     "last_uploaded_episode": 30,
     "total_episodes": 30,
     "added_at": "2026-03-13T23:01:26.812475"
+  },
+  {
+    "tmdb_id": 304267,
+    "name": "حمدية",
+    "poster_path": "/zj7JKw3nFW6I8fpcIK8qTgGe2nQ.jpg",
+    "last_uploaded_season": 1,
+    "last_uploaded_episode": 12,
+    "total_episodes": 30,
+    "added_at": "2026-03-19T03:33:20.891724"
   }
 ]
