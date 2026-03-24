@@ -43,5 +43,14 @@
     "last_uploaded_episode": 30,
     "total_episodes": 30,
     "added_at": "2026-03-24T08:35:13.038922"
+  },
+  {
+    "tmdb_id": 247248,
+    "name": "روح",
+    "poster_path": "/nZXsaFhBE61FqnqEOo7DIwapMuZ.jpg",
+    "last_uploaded_season": 1,
+    "last_uploaded_episode": 15,
+    "total_episodes": 15,
+    "added_at": "2026-03-24T08:41:06.338405"
   }
 ]
