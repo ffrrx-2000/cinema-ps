@@ -1,6 +1,5 @@
 {
   "cinema_plus": {
-    
     "1": {
       "id": "f80140b2-172d-40a8-b9dc-726da8074c63",
       "secret": "AdMgstohv28u2Fxh9dn1R9bPZuRzPi61UNLo7W8YIwSDFqmloSJtyQ9RMXuW+RD7fr3PHgZiNLK"
@@ -44,6 +43,10 @@
     "11": {
       "id": "595dd733-df14-4663-9bed-d536c127aaea",
       "secret": "b8k1s0rHGQb+/Uf4o9foDZjAXCGs7pDL9c08gF7uyzj11BdY7nBfNGVTJhETkPX9jXGQGYj0pxJ"
+    },
+    "12": {
+      "id": "6101d434-9dbd-4b25-b5cb-f44671b4e14b",
+      "secret": "WqnhdWaNBWH2noO4rgTQ/y+PtufgEPEtxsmJHuhDwOMFtToGpUM2YuitwdpZ+Nxa6Mp4XneEkhU"
     }
   },
   "shoof_play": {
