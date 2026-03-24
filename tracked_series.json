@@ -34,5 +34,14 @@
     "last_uploaded_episode": 30,
     "total_episodes": 30,
     "added_at": "2026-03-20T13:43:32.178514"
+  },
+  {
+    "tmdb_id": 218739,
+    "name": "جعفر العمدة",
+    "poster_path": "",
+    "last_uploaded_season": 1,
+    "last_uploaded_episode": 30,
+    "total_episodes": 30,
+    "added_at": "2026-03-24T08:35:13.038922"
   }
 ]
