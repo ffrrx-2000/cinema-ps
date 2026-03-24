@@ -450,7 +450,12 @@ user_auth_cache = {}
     # Batch upload states
     TRACKED_SERIES_BATCH_COLLECT,
     TRACKED_SERIES_BATCH_CONFIRM,
-) = range(26)
+    # Quick batch upload states (new feature)
+    QUICK_BATCH_ENTER_COUNT,
+    QUICK_BATCH_ENTER_NAME,
+    QUICK_BATCH_ENTER_LINKS,
+    QUICK_BATCH_CONFIRM,
+) = range(30)
 
 
 def is_user_authenticated(user_id: int, system: str) -> bool:
@@ -562,6 +567,7 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edi
 
     keyboard = [
         [InlineKeyboardButton("📤 رفع فيديو", callback_data="menu_upload")],
+        [InlineKeyboardButton("🚀 رفع روابط سريع", callback_data="menu_quick_batch")],
     ]
 
     # Series features only for Cinema Plus
@@ -620,6 +626,8 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if action == "menu_upload":
         return await show_section_selector(update, context, "upload")
+    elif action == "menu_quick_batch":
+        return await quick_batch_start(update, context)
     elif action == "menu_series":
         return await series_start(update, context)
     elif action == "menu_tracked":
@@ -3161,6 +3169,355 @@ async def tracked_cancel_ep_callback(update: Update, context: ContextTypes.DEFAU
         return await tracked_series_show_detail(update, context, tmdb_id)
 
 
+# ─── Quick Batch Upload Feature ─────────────────────────────────────────────
+
+
+async def quick_batch_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start quick batch upload - ask for episode count first."""
+    query = update.callback_query
+    system = context.user_data.get("system")
+    system_name = get_system_name(system)
+
+    keyboard = [[InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")]]
+
+    await query.edit_message_text(
+        f"🚀 <b>رفع روابط سريع - {system_name}</b>\n\n"
+        f"<b>الخطوة 1 من 3:</b>\n"
+        f"أدخل عدد الحلقات التي تريد رفعها:\n\n"
+        f"<i>مثال: اكتب 30 إذا كان لديك 30 رابط</i>",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML,
+    )
+    return QUICK_BATCH_ENTER_COUNT
+
+
+async def quick_batch_handle_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle episode count input and check available sections."""
+    count_text = update.message.text.strip()
+
+    if not count_text.isdigit():
+        await update.message.reply_text(
+            "⚠️ <b>الرجاء إدخال رقم صحيح!</b>\n\n"
+            "مثال: 30",
+            parse_mode=ParseMode.HTML,
+        )
+        return QUICK_BATCH_ENTER_COUNT
+
+    episode_count = int(count_text)
+    if episode_count <= 0 or episode_count > 500:
+        await update.message.reply_text(
+            "⚠️ <b>الرجاء إدخال عدد بين 1 و 500!</b>",
+            parse_mode=ParseMode.HTML,
+        )
+        return QUICK_BATCH_ENTER_COUNT
+
+    system = context.user_data.get("system")
+    system_name = get_system_name(system)
+
+    # Check available sections
+    available = get_available_sections_with_space(system)
+    total_free = sum(s["free"] for s in available)
+    sections_needed = calculate_sections_needed(episode_count)
+
+    context.user_data["quick_batch_count"] = episode_count
+
+    if total_free < episode_count:
+        # Not enough space
+        missing = episode_count - total_free
+        extra_sections = calculate_sections_needed(missing)
+        keyboard = [
+            [InlineKeyboardButton("➕ إضافة قسم جديد", callback_data="menu_add_section")],
+            [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
+        ]
+        await update.message.reply_text(
+            f"⚠️ <b>لا توجد مساحة كافية!</b>\n\n"
+            f"📊 <b>عدد الحلقات المطلوبة:</b> {episode_count}\n"
+            f"✅ <b>الأماكن المتاحة:</b> {total_free}\n"
+            f"❌ <b>ينقصك:</b> {missing} مكان\n"
+            f"📁 <b>تحتاج إضافة:</b> {extra_sections} قسم/أقسام\n\n"
+            f"<i>الرجاء إضافة أقسام جديدة ثم العودة.</i>",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.HTML,
+        )
+        return MAIN_MENU
+
+    # Enough space - show capacity info and ask for name
+    keyboard = [[InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")]]
+
+    # Build section distribution preview
+    section_info = ""
+    remaining = episode_count
+    for sec in available:
+        if remaining <= 0:
+            break
+        take = min(sec["free"], remaining)
+        section_info += f"  القسم {sec['section_id']}: {take} حلقة\n"
+        remaining -= take
+
+    await update.message.reply_text(
+        f"✅ <b>يوجد مساحة كافية!</b>\n\n"
+        f"📊 <b>عدد الحلقات:</b> {episode_count}\n"
+        f"✅ <b>الأماكن المتاحة:</b> {total_free}\n\n"
+        f"<b>توزيع الأقسام:</b>\n{section_info}\n"
+        f"<b>الخطوة 2 من 3:</b>\n"
+        f"أدخل اسم المسلسل ورقم الموسم:\n\n"
+        f"<i>مثال: الحفرة موسم 1</i>\n"
+        f"<i>أو: Breaking Bad موسم 2</i>",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML,
+    )
+    return QUICK_BATCH_ENTER_NAME
+
+
+async def quick_batch_handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle series name and season input."""
+    name_input = update.message.text.strip()
+
+    # Parse name and season
+    # Try to extract season number from input like "الحفرة موسم 1" or "الحفرة 1"
+    season_match = re.search(r'موسم\s*(\d+)', name_input)
+    if season_match:
+        season_num = int(season_match.group(1))
+        series_name = re.sub(r'\s*موسم\s*\d+', '', name_input).strip()
+    else:
+        # Try to find just a number at the end
+        num_match = re.search(r'\s+(\d+)\s*$', name_input)
+        if num_match:
+            season_num = int(num_match.group(1))
+            series_name = re.sub(r'\s+\d+\s*$', '', name_input).strip()
+        else:
+            season_num = 1
+            series_name = name_input
+
+    context.user_data["quick_batch_name"] = series_name
+    context.user_data["quick_batch_season"] = season_num
+
+    episode_count = context.user_data.get("quick_batch_count", 0)
+    system = context.user_data.get("system")
+    system_name = get_system_name(system)
+
+    keyboard = [[InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")]]
+
+    await update.message.reply_text(
+        f"✅ <b>تم تسجيل المعلومات</b>\n\n"
+        f"📺 <b>المسلسل:</b> {series_name}\n"
+        f"📀 <b>الموسم:</b> {season_num}\n"
+        f"📊 <b>عدد الحلقات:</b> {episode_count}\n\n"
+        f"<b>الخطوة 3 من 3:</b>\n"
+        f"أرسل الروابط الآن ({episode_count} رابط)\n\n"
+        f"<b>⚠️ مهم:</b> أرسل كل رابط في سطر منفصل مع سطر فارغ بينهم:\n\n"
+        f"<code>https://example.com/ep01.mp4\n\n"
+        f"https://example.com/ep02.mp4\n\n"
+        f"https://example.com/ep03.mp4</code>\n\n"
+        f"<i>سيتم تسمية الحلقات تلقائياً:</i>\n"
+        f"<i>• {series_name} موسم {season_num} حلقة 1</i>\n"
+        f"<i>• {series_name} موسم {season_num} حلقة 2</i>\n"
+        f"<i>• وهكذا...</i>",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML,
+    )
+    return QUICK_BATCH_ENTER_LINKS
+
+
+async def quick_batch_handle_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle batch links input and start uploading."""
+    message_text = update.message.text.strip()
+
+    # Parse links - split by double newlines (blank line) or single newlines
+    # First try double newlines
+    if '\n\n' in message_text:
+        links = [link.strip() for link in message_text.split('\n\n') if link.strip()]
+    else:
+        links = [link.strip() for link in message_text.split('\n') if link.strip()]
+
+    # Filter out empty lines and validate URLs
+    valid_links = []
+    for link in links:
+        link = link.strip()
+        if link and (link.startswith('http://') or link.startswith('https://')):
+            valid_links.append(link)
+
+    if not valid_links:
+        await update.message.reply_text(
+            "⚠️ <b>لم يتم العثور على روابط صالحة!</b>\n\n"
+            "تأكد من أن الروابط تبدأ بـ http:// أو https://\n"
+            "وأن كل رابط في سطر منفصل.",
+            parse_mode=ParseMode.HTML,
+        )
+        return QUICK_BATCH_ENTER_LINKS
+
+    expected_count = context.user_data.get("quick_batch_count", 0)
+    series_name = context.user_data.get("quick_batch_name", "مسلسل")
+    season_num = context.user_data.get("quick_batch_season", 1)
+    system = context.user_data.get("system")
+    system_name = get_system_name(system)
+
+    # Check if link count matches
+    if len(valid_links) != expected_count:
+        keyboard = [[InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")]]
+        await update.message.reply_text(
+            f"⚠️ <b>عدد الروابط غير متطابق!</b>\n\n"
+            f"📊 <b>المتوقع:</b> {expected_count} رابط\n"
+            f"📥 <b>المرسل:</b> {len(valid_links)} رابط\n\n"
+            f"<i>هل تريد المتابعة برفع {len(valid_links)} رابط؟</i>\n"
+            f"<i>أو أعد إرسال الروابط بالعدد الصحيح.</i>",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.HTML,
+        )
+        # Store links anyway and proceed
+        context.user_data["quick_batch_links"] = valid_links
+
+    context.user_data["quick_batch_links"] = valid_links
+
+    # Try to delete the message containing links
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
+    # Start uploading
+    status_msg = await update.message.reply_text(
+        f"🚀 <b>جاري رفع {len(valid_links)} حلقة...</b>\n\n"
+        f"📺 {series_name} موسم {season_num}\n"
+        f"🎬 النظام: {system_name}\n\n"
+        f"⏳ الرجاء الانتظار...",
+        parse_mode=ParseMode.HTML,
+    )
+
+    # Get available sections
+    available = get_available_sections_with_space(system)
+    total_free = sum(s["free"] for s in available)
+
+    if total_free < len(valid_links):
+        keyboard = [
+            [InlineKeyboardButton("➕ إضافة قسم جديد", callback_data="menu_add_section")],
+            [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
+        ]
+        await status_msg.edit_text(
+            f"⚠️ <b>لا توجد مساحة كافية!</b>\n\n"
+            f"تحتاج {len(valid_links)} مكان، المتاح: {total_free}\n"
+            f"الرجاء إضافة أقسام جديدة.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.HTML,
+        )
+        return MAIN_MENU
+
+    # Upload all links
+    results = []
+    sec_idx = 0
+    sec_used = 0
+
+    for i, video_url in enumerate(valid_links):
+        ep_num = i + 1
+        passthrough_name = f"{series_name} موسم {season_num} حلقة {ep_num}"
+
+        # Find section with space
+        while sec_idx < len(available) and sec_used >= available[sec_idx]["free"]:
+            sec_idx += 1
+            sec_used = 0
+
+        if sec_idx >= len(available):
+            results.append((ep_num, "❌", "لا توجد مساحة", "", passthrough_name))
+            continue
+
+        section = available[sec_idx]
+        creds = section["creds"]
+        section_id = section["section_id"]
+
+        try:
+            response = requests.post(
+                "https://api.mux.com/video/v1/assets",
+                json={
+                    "input": [{"url": video_url}],
+                    "playback_policy": ["public"],
+                    "passthrough": passthrough_name,
+                },
+                auth=(creds["id"], creds["secret"]),
+                timeout=30,
+            )
+
+            if response.status_code == 201:
+                res_data = response.json()["data"]
+                asset_id = res_data["id"]
+                playback_ids = res_data.get("playback_ids", [])
+                playback_id = playback_ids[0]["id"] if playback_ids else "قيد الانتظار..."
+
+                results.append((ep_num, "✅", playback_id, section_id, passthrough_name))
+                sec_used += 1
+
+                # Track in background
+                asyncio.create_task(
+                    track_asset_status(
+                        update.effective_chat.id,
+                        context.bot,
+                        asset_id,
+                        creds,
+                        passthrough_name,
+                        playback_id,
+                    )
+                )
+            else:
+                error_msg = response.json().get("error", {}).get("message", "خطأ")
+                results.append((ep_num, "❌", error_msg, section_id, passthrough_name))
+
+        except Exception as e:
+            results.append((ep_num, "⚠️", str(e)[:50], "", passthrough_name))
+
+        # Update progress
+        try:
+            await status_msg.edit_text(
+                f"🚀 <b>جاري رفع {len(valid_links)} حلقة...</b>\n\n"
+                f"📺 {series_name} موسم {season_num}\n"
+                f"🎬 النظام: {system_name}\n\n"
+                f"📊 التقدم: {i + 1}/{len(valid_links)}\n"
+                f"⏳ جاري رفع الحلقة {ep_num}...",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            pass
+
+    # Show results
+    text = f"📊 <b>نتائج الرفع - {series_name} موسم {season_num}</b>\n\n"
+    all_ids = []
+    success_count = 0
+
+    # Sort results by episode number
+    sorted_results = sorted(results, key=lambda x: x[0])
+
+    for ep_num, status, pid, sid, name in sorted_results:
+        if status == "✅":
+            text += f"{status} حلقة {ep_num}: <code>{pid}</code> (القسم {sid})\n"
+            if pid != "قيد الانتظار...":
+                all_ids.append(pid)
+            success_count += 1
+        else:
+            text += f"{status} حلقة {ep_num}: {pid}\n"
+
+    text += f"\n📊 <b>النتيجة:</b> {success_count}/{len(valid_links)} حلقة تم رفعها بنجاح\n"
+
+    if all_ids:
+        text += f"\n<b>نسخ سريع (جميع المعرفات):</b>\n<code>{chr(10).join(all_ids)}</code>"
+
+    keyboard = [
+        [InlineKeyboardButton("🚀 رفع روابط أخرى", callback_data="menu_quick_batch")],
+        [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
+    ]
+
+    await status_msg.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML,
+    )
+
+    # Clean up
+    context.user_data.pop("quick_batch_count", None)
+    context.user_data.pop("quick_batch_name", None)
+    context.user_data.pop("quick_batch_season", None)
+    context.user_data.pop("quick_batch_links", None)
+
+    return MAIN_MENU
+
+
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "❌ <b>تم إلغاء العملية</b>\n\n" "استخدم /start للبدء من جديد.",
@@ -3302,6 +3659,22 @@ def main():
             ],
             TRACKED_SERIES_BATCH_CONFIRM: [
                 CallbackQueryHandler(tracked_series_batch_callback, pattern="^batch_"),
+            ],
+            # Quick batch upload states
+            QUICK_BATCH_ENTER_COUNT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, quick_batch_handle_count),
+                CallbackQueryHandler(main_menu_handler, pattern="^menu_back$"),
+            ],
+            QUICK_BATCH_ENTER_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, quick_batch_handle_name),
+                CallbackQueryHandler(main_menu_handler, pattern="^menu_back$"),
+            ],
+            QUICK_BATCH_ENTER_LINKS: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, quick_batch_handle_links),
+                CallbackQueryHandler(main_menu_handler, pattern="^menu_back$"),
+            ],
+            QUICK_BATCH_CONFIRM: [
+                CallbackQueryHandler(main_menu_handler, pattern="^menu_"),
             ],
         },
         fallbacks=[
