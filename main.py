@@ -455,7 +455,11 @@ user_auth_cache = {}
     QUICK_BATCH_ENTER_NAME,
     QUICK_BATCH_ENTER_LINKS,
     QUICK_BATCH_CONFIRM,
-) = range(30)
+    # Failed videos delete states
+    DELETE_MODE_SELECT,
+    SCAN_FAILED_VIDEOS,
+    CONFIRM_DELETE_FAILED,
+) = range(33)
 
 
 def is_user_authenticated(user_id: int, system: str) -> bool:
@@ -582,7 +586,7 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edi
 
     keyboard.extend([
         [InlineKeyboardButton("🔍 مراجعة القسم", callback_data="menu_review")],
-        [InlineKeyboardButton("🗑️ حذف فيديو", callback_data="menu_delete")],
+        [InlineKeyboardButton("🗑️ حذف", callback_data="menu_delete")],
         [InlineKeyboardButton("🎞️ عرض معرفات التشغيل", callback_data="menu_playback")],
         [InlineKeyboardButton("📊 فحص السعة المباشر", callback_data="menu_capacity")],
         [InlineKeyboardButton("➕ إضافة قسم", callback_data="menu_add_section")],
@@ -635,7 +639,7 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif action == "menu_review":
         return await show_section_selector(update, context, "review")
     elif action == "menu_delete":
-        return await show_section_selector(update, context, "delete")
+        return await show_delete_mode_selector(update, context)
     elif action == "menu_playback":
         return await show_section_selector(update, context, "playback")
     elif action == "menu_capacity":
@@ -1259,6 +1263,283 @@ async def handle_capacity_section(update: Update, context: ContextTypes.DEFAULT_
             parse_mode=ParseMode.HTML,
         )
         return MAIN_MENU
+
+
+async def show_delete_mode_selector(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show delete mode selection: single video or failed videos."""
+    query = update.callback_query
+    system = context.user_data.get("system")
+    system_name = get_system_name(system)
+
+    keyboard = [
+        [InlineKeyboardButton("🎥 حذف فيديو واحد محدد", callback_data="delete_mode_single")],
+        [InlineKeyboardButton("❌ حذف الفيديوهات الفاشلة", callback_data="delete_mode_failed")],
+        [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
+    ]
+
+    await query.edit_message_text(
+        f"🗑️ <b>حذف - {system_name}</b>\n\n"
+        "اختر نوع الحذف:\n\n"
+        "🎥 <b>حذف فيديو واحد محدد:</b>\n"
+        "   اختر قسم ثم اختر الفيديو الذي تريد حذفه\n\n"
+        "❌ <b>حذف الفيديوهات الفاشلة:</b>\n"
+        "   فحص جميع الأقسام وحذف الفيديوهات التي فشلت في الرفع",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML,
+    )
+    return DELETE_MODE_SELECT
+
+
+async def handle_delete_mode_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle delete mode selection."""
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "menu_back":
+        return await show_main_menu(update, context, edit=True)
+
+    if query.data == "delete_mode_single":
+        # Go to section selector for single video delete
+        return await show_section_selector(update, context, "delete")
+
+    elif query.data == "delete_mode_failed":
+        # Start scanning for failed videos
+        return await scan_failed_videos(update, context)
+
+
+async def scan_failed_videos(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Scan all sections for failed videos."""
+    query = update.callback_query
+    system = context.user_data.get("system")
+    system_name = get_system_name(system)
+    sections = get_sections_for_system(system)
+
+    if not sections:
+        keyboard = [[InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")]]
+        await query.edit_message_text(
+            f"⚠️ <b>لا توجد أقسام في {system_name}</b>",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.HTML,
+        )
+        return MAIN_MENU
+
+    await query.edit_message_text(
+        f"⏳ <b>جاري فحص جميع الأقسام في {system_name}...</b>\n\n"
+        "الرجاء الانتظار...",
+        parse_mode=ParseMode.HTML,
+    )
+
+    # Scan all sections for failed videos
+    failed_videos = []
+    sorted_sections = sorted(sections.keys(), key=lambda x: int(x) if x.isdigit() else 0)
+
+    for section_id in sorted_sections:
+        creds = sections[section_id]
+        try:
+            res = requests.get(
+                "https://api.mux.com/video/v1/assets",
+                auth=(creds["id"], creds["secret"]),
+                timeout=15,
+            )
+            assets = res.json().get("data", [])
+
+            for asset in assets:
+                status = asset.get("status", "")
+                # Check for failed status (errored, cancelled, or not ready/preparing after long time)
+                if status in ["errored", "cancelled"]:
+                    video_name = asset.get("passthrough") or asset.get("meta", {}).get("name", "بدون عنوان")
+                    if not video_name:
+                        video_name = "بدون عنوان"
+                    failed_videos.append({
+                        "section_id": section_id,
+                        "creds": creds,
+                        "asset_id": asset.get("id"),
+                        "video_name": video_name,
+                        "status": status,
+                    })
+        except Exception:
+            pass
+
+    context.user_data["failed_videos"] = failed_videos
+    context.user_data["failed_video_index"] = 0
+
+    if not failed_videos:
+        keyboard = [[InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")]]
+        await query.edit_message_text(
+            f"✅ <b>لا توجد فيديوهات فاشلة!</b>\n\n"
+            f"🎬 <b>النظام:</b> {system_name}\n\n"
+            "جميع الفيديوهات في حالة جيدة.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.HTML,
+        )
+        return MAIN_MENU
+
+    # Show options: delete one by one or delete all at once
+    keyboard = [
+        [InlineKeyboardButton(f"🔄 حذف واحد تلو الآخر ({len(failed_videos)})", callback_data="failed_delete_one_by_one")],
+        [InlineKeyboardButton(f"🗑️ حذف الكل دفعة واحدة ({len(failed_videos)})", callback_data="failed_delete_all")],
+        [InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")],
+    ]
+
+    text = (
+        f"❌ <b>تم العثور على {len(failed_videos)} فيديو فاشل!</b>\n\n"
+        f"🎬 <b>النظام:</b> {system_name}\n\n"
+        "<b>الفيديوهات الفاشلة:</b>\n"
+    )
+
+    for i, video in enumerate(failed_videos[:10], 1):
+        status_text = "خطأ" if video["status"] == "errored" else "ملغي"
+        text += f"{i}. 📁 قسم {video['section_id']}: {video['video_name']} ({status_text})\n"
+
+    if len(failed_videos) > 10:
+        text += f"\n<i>... و {len(failed_videos) - 10} فيديو آخر</i>\n"
+
+    text += "\n<b>اختر طريقة الحذف:</b>"
+
+    await query.edit_message_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML,
+    )
+    return SCAN_FAILED_VIDEOS
+
+
+async def handle_failed_videos_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle actions on failed videos."""
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "menu_back":
+        return await show_main_menu(update, context, edit=True)
+
+    failed_videos = context.user_data.get("failed_videos", [])
+    system = context.user_data.get("system")
+    system_name = get_system_name(system)
+
+    if query.data == "failed_delete_all":
+        # Delete all failed videos at once
+        await query.edit_message_text(
+            f"⏳ <b>جاري حذف {len(failed_videos)} فيديو...</b>\n\n"
+            "الرجاء الانتظار...",
+            parse_mode=ParseMode.HTML,
+        )
+
+        deleted_count = 0
+        failed_count = 0
+
+        for video in failed_videos:
+            try:
+                response = requests.delete(
+                    f"https://api.mux.com/video/v1/assets/{video['asset_id']}",
+                    auth=(video["creds"]["id"], video["creds"]["secret"]),
+                    timeout=30,
+                )
+                if response.status_code == 204:
+                    deleted_count += 1
+                else:
+                    failed_count += 1
+            except Exception:
+                failed_count += 1
+
+        keyboard = [[InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")]]
+
+        if failed_count == 0:
+            await query.edit_message_text(
+                f"✅ <b>تم حذف جميع الفيديوهات الفاشلة!</b>\n\n"
+                f"🎬 <b>النظام:</b> {system_name}\n"
+                f"🗑️ <b>تم حذف:</b> {deleted_count} فيديو",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.HTML,
+            )
+        else:
+            await query.edit_message_text(
+                f"⚠️ <b>تم الحذف مع بعض الأخطاء</b>\n\n"
+                f"🎬 <b>النظام:</b> {system_name}\n"
+                f"✅ <b>تم حذف:</b> {deleted_count} فيديو\n"
+                f"❌ <b>فشل حذف:</b> {failed_count} فيديو",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.HTML,
+            )
+        return MAIN_MENU
+
+    elif query.data == "failed_delete_one_by_one":
+        # Start one by one deletion
+        context.user_data["failed_video_index"] = 0
+        return await show_next_failed_video(update, context)
+
+    elif query.data == "failed_delete_yes":
+        # Delete current video and move to next
+        index = context.user_data.get("failed_video_index", 0)
+        if index < len(failed_videos):
+            video = failed_videos[index]
+            try:
+                response = requests.delete(
+                    f"https://api.mux.com/video/v1/assets/{video['asset_id']}",
+                    auth=(video["creds"]["id"], video["creds"]["secret"]),
+                    timeout=30,
+                )
+                if response.status_code == 204:
+                    await query.answer("✅ تم الحذف بنجاح", show_alert=False)
+                else:
+                    await query.answer("❌ فشل الحذف", show_alert=True)
+            except Exception:
+                await query.answer("❌ خطأ في الحذف", show_alert=True)
+
+        context.user_data["failed_video_index"] = index + 1
+        return await show_next_failed_video(update, context)
+
+    elif query.data == "failed_delete_skip":
+        # Skip current video and move to next
+        index = context.user_data.get("failed_video_index", 0)
+        context.user_data["failed_video_index"] = index + 1
+        return await show_next_failed_video(update, context)
+
+    elif query.data == "failed_delete_stop":
+        # Stop and return to menu
+        return await show_main_menu(update, context, edit=True)
+
+
+async def show_next_failed_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show the next failed video for deletion confirmation."""
+    query = update.callback_query
+    failed_videos = context.user_data.get("failed_videos", [])
+    index = context.user_data.get("failed_video_index", 0)
+    system = context.user_data.get("system")
+    system_name = get_system_name(system)
+
+    if index >= len(failed_videos):
+        # All done
+        keyboard = [[InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_back")]]
+        await query.edit_message_text(
+            f"✅ <b>تم الانتهاء من مراجعة جميع الفيديوهات الفاشلة!</b>\n\n"
+            f"🎬 <b>النظام:</b> {system_name}",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.HTML,
+        )
+        return MAIN_MENU
+
+    video = failed_videos[index]
+    status_text = "خطأ في الرفع" if video["status"] == "errored" else "ملغي"
+    remaining = len(failed_videos) - index
+
+    keyboard = [
+        [InlineKeyboardButton("✅ نعم، احذف", callback_data="failed_delete_yes")],
+        [InlineKeyboardButton("⏭️ تخطي", callback_data="failed_delete_skip")],
+        [InlineKeyboardButton("🛑 إيقاف والعودة", callback_data="failed_delete_stop")],
+    ]
+
+    await query.edit_message_text(
+        f"❌ <b>فيديو فاشل ({index + 1}/{len(failed_videos)})</b>\n\n"
+        f"🎬 <b>النظام:</b> {system_name}\n"
+        f"📁 <b>القسم:</b> {video['section_id']}\n"
+        f"🎥 <b>اسم الفيديو:</b> {video['video_name']}\n"
+        f"⚠️ <b>الحالة:</b> {status_text}\n\n"
+        f"<b>هل تريد حذف هذا الفيديو؟</b>\n"
+        f"<i>متبقي: {remaining} فيديو</i>",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML,
+    )
+    return CONFIRM_DELETE_FAILED
 
 
 async def handle_delete_section(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3603,6 +3884,19 @@ def main():
             ],
             CONFIRM_DELETE: [
                 CallbackQueryHandler(handle_delete_confirmation, pattern="^confirm_delete_"),
+            ],
+            # Failed videos delete states
+            DELETE_MODE_SELECT: [
+                CallbackQueryHandler(handle_delete_mode_selection, pattern="^delete_mode_"),
+                CallbackQueryHandler(main_menu_handler, pattern="^menu_back$"),
+            ],
+            SCAN_FAILED_VIDEOS: [
+                CallbackQueryHandler(handle_failed_videos_action, pattern="^failed_delete_"),
+                CallbackQueryHandler(main_menu_handler, pattern="^menu_back$"),
+            ],
+            CONFIRM_DELETE_FAILED: [
+                CallbackQueryHandler(handle_failed_videos_action, pattern="^failed_delete_"),
+                CallbackQueryHandler(main_menu_handler, pattern="^menu_back$"),
             ],
             ADD_SECTION_MUX_ID: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_add_section_mux_id),
